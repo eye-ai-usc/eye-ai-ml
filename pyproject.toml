@@ -27,6 +27,9 @@ lint = [
     "ruff>=0.12.7",
 ]
 
+[tool.uv]
+python-preference = "only-managed"
+
 [tool.setuptools.package-data]
 # include VERSION file to a package
 
