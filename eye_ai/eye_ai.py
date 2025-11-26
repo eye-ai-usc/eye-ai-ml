@@ -1,14 +1,17 @@
 import xml.etree.ElementTree as ET
-from pathlib import Path, PurePath
+from pathlib import Path
 from typing import List, Callable, Optional
-from importlib.metadata import version
 import matplotlib.pyplot as plt
 import pandas as pd
 from PIL import Image
 from sklearn.metrics import roc_curve
-from deriva_ml import DerivaML, DerivaMLException
-from deriva_ml.dataset import DatasetBag
+
 import numpy as np
+import logging
+
+from deriva_ml import DerivaML, DerivaMLException
+from deriva_ml.core.definitions import ML_SCHEMA
+from deriva_ml.dataset import DatasetBag
 
 class EyeAIException(DerivaMLException):
     def __init__(self, msg=""):
@@ -48,8 +51,19 @@ class EyeAI(DerivaML):
        entities into a table.
     """
 
-    def __init__(self, hostname: str = 'www.eye-ai.org', catalog_id: str = 'eye-ai',
-                 cache_dir: str = None, working_dir: str = None, ml_schema: str = 'deriva-ml'):
+    def __init__(self, hostname: str = 'www.eye-ai.org',
+                 catalog_id: str = 'eye-ai',
+                 domain_schema: str | None = None,
+                 project_name: str | None = None,
+                 cache_dir: str | Path | None = None,
+                 working_dir: str | Path | None = None,
+                 hydra_runtime_output_dir: str | Path | None = None,
+                 ml_schema: str = ML_SCHEMA,
+                 logging_level=logging.WARNING,
+                 deriva_logging_level=logging.WARNING,
+                 credential=None,
+                 use_minid: bool = True,
+                 check_auth: bool = True):
         """
         Initializes the EyeAI object.
 
@@ -58,10 +72,21 @@ class EyeAI(DerivaML):
         - catalog_number (str): The catalog number or name.
         """
 
-        super().__init__(hostname = hostname, catalog_id = catalog_id,
-                         domain_schema = 'eye-ai', project_name = 'eye-ai',
-                         cache_dir = cache_dir, working_dir = working_dir,
-                         ml_schema = ml_schema)
+        super().__init__(
+            hostname=hostname,
+            catalog_id=catalog_id,
+            domain_schema=domain_schema,
+            ml_schema=ml_schema,
+            project_name=project_name,
+            cache_dir=cache_dir,
+            working_dir=working_dir,
+            hydra_runtime_output_dir=hydra_runtime_output_dir,
+            logging_level=logging_level,
+            deriva_logging_level=deriva_logging_level,
+            credential=credential,
+            use_minid=use_minid,
+            check_auth=check_auth
+        )
 
     @staticmethod
     def _find_latest_observation(df: pd.DataFrame):

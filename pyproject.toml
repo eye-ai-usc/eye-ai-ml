@@ -11,9 +11,9 @@ authors = [
 description = "ML code for the EYE-AI project"
 dynamic = ["version"]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "deriva-ml",
+    "deriva-ml >= 1.17.0",
     "pandas",
     "pillow",
     "matplotlib",
