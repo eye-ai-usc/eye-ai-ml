@@ -735,7 +735,7 @@ wheels = [
 
 [[package]]
 name = "deriva-ml"
-version = "1.17.0"
+version = "1.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bdbag" },
@@ -757,9 +757,9 @@ dependencies = [
     { name = "setuptools-scm" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/84/22/68a2a45d92502837ec8e388ec3f4169eec38cd44e4e53b8afc6ae92095a1/deriva_ml-1.17.0.tar.gz", hash = "sha256:d511cf88d59a83f39b758cac0e88943fb156314440d4b09c3f693bd211b931a8", size = 3828471, upload-time = "2025-11-25T22:56:19.693Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/b9/bcadd2b5c2caa1f6783f78c1c4c54eb9eefa64e8126964f839a6853af22c/deriva_ml-1.17.1.tar.gz", hash = "sha256:61c07969e0eb751fa624e1e20d27a600846396f8fd0d1950ab4cb1dfa1af3adc", size = 3828431, upload-time = "2025-11-26T06:46:55.651Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8d/58/901d2cf54935d7cc64e6c0d44a5e92e5ad7ed4b1a26d03f524f05fec590d/deriva_ml-1.17.0-py3-none-any.whl", hash = "sha256:5cefbd1d99072e2488e6c19daee88e1ac369b51188fc8e7ea999769fb507f6b5", size = 130234, upload-time = "2025-11-25T22:56:21.139Z" },
+    { url = "https://files.pythonhosted.org/packages/55/15/81ca5ca0a261420c062d88211c3198b3542f97b37bcfb43cb9186af5fc3e/deriva_ml-1.17.1-py3-none-any.whl", hash = "sha256:30590c1ed72d55a05acb8c248fb7cfd9852461549b57f8819d1287e3b3dc7aad", size = 130133, upload-time = "2025-11-26T06:46:57.142Z" },
 ]
 
 [[package]]
