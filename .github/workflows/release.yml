@@ -58,7 +58,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish:
-    name: Publish to PyPI
+    name: Publish to GitHub Packages
     runs-on: ubuntu-latest
     needs: [build, create-release]
     environment: publish  # Optional GitHub environment to protect this step
