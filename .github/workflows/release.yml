@@ -1,5 +1,7 @@
 name: Build and Release
 
+
+  
 on:
   push:
     tags:
@@ -7,7 +9,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # Required to create GitHub Releases
+  id-token: write
+  contents: read
 
 jobs:
   build:
@@ -25,8 +28,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Install uv
+      
+      - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v6
 
       - name: Build package
@@ -46,12 +49,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download dist artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: dist
-          path: dist/
-
       - name: Draft GitHub Release
         uses: release-drafter/release-drafter@v5
         with:
@@ -60,9 +57,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload distribution to GitHub Release
-        uses: softprops/action-gh-release@v1
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build, create-release]
+    environment: publish  # Optional GitHub environment to protect this step
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
-          files: dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Download built dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        run: uv publish --index github --verbose
+ 
