@@ -83,8 +83,8 @@ jobs:
           path: dist/
 
       - name: Publish to GitHub Packages
-          env:
-            UV_PUBLISH_USERNAME: ${{ github.actor }}
-            UV_PUBLISH_PASSWORD: ${{ secrets.GH_PACKAGES_TOKEN }}
-          run: uv publish --index github --verbose
+        env:
+          UV_PUBLISH_USERNAME: ${{ github.actor }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.GH_PACKAGES_TOKEN }}
+        run: uv publish --index github --verbose
  
