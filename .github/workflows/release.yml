@@ -82,6 +82,6 @@ jobs:
           name: dist
           path: dist/
 
-      - name: Publish to PyPI
+      - name: Publish to GitHub Packages
         run: uv publish --index github --verbose
  
