@@ -10,7 +10,8 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
+  pull-requests: read
 
 jobs:
   build:
@@ -55,13 +56,12 @@ jobs:
           config-name: release-drafter.yml
           publish: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
   publish:
     name: Publish to GitHub Packages
     runs-on: ubuntu-latest
     needs: [build, create-release]
-    environment: publish  # Optional GitHub environment to protect this step
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -83,5 +83,8 @@ jobs:
           path: dist/
 
       - name: Publish to GitHub Packages
-        run: uv publish --index github --verbose
+          env:
+            UV_PUBLISH_USERNAME: ${{ github.actor }}
+            UV_PUBLISH_PASSWORD: ${{ secrets.GH_PACKAGES_TOKEN }}
+          run: uv publish --index github --verbose
  
