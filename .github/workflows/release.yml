@@ -84,7 +84,6 @@ jobs:
 
       - name: Publish to GitHub Packages
         env:
-          UV_PUBLISH_USERNAME: ${{ github.actor }}
-          UV_PUBLISH_PASSWORD: ${{ secrets.GH_PACKAGES_TOKEN }}
+          UV_GITHUB_TOKEN: ${{ secrets.GH_PACKAGES_TOKEN }}  # PAT with repo + read:packages + write:packages
         run: uv publish --index github --verbose
  
