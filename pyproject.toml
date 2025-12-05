@@ -33,7 +33,8 @@ index-strategy = "unsafe-any-match"
 
 [[tool.uv.index]]
 name = "github"
-url = "https://pypi.pkg.github.com/eye-ai-usc" # typically ghcr.io
+url = "https://pypi.pkg.github.com/eye-ai-usc/" # typically ghcr.io
+publish-url = "https://pypi.pkg.github.com/eye-ai-usc/"
 explicit = true
 
 
