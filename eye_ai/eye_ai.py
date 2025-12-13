@@ -136,6 +136,9 @@ class EyeAI(DerivaML):
         image_frame = merge_diag[merge_diag['Image_Angle'] == '2']
 
         image_frame = image_frame[image_frame['Diagnosis_Tag'] == diagnosis_tag]
+
+        # image_frame = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Image", "Image_Diagnosis"])
+        # image_frame = ds_bag[(ds_bag['Image.Image_Angle'] == '2') & (ds_bag['Image_Diagnosis.Diagnosis_Tag'] == diagnosis_tag)]
         # Select only the first observation which included in the grading app.
     
      
@@ -444,167 +447,103 @@ class EyeAI(DerivaML):
 
     @staticmethod
     def _select_24_2(hvf: pd.DataFrame) -> pd.DataFrame:
-        hvf_clean = hvf.dropna(subset=['RID_HVF_OCR'])
+        hvf_clean = hvf.dropna(subset=['OCR_HVF.RID'])
         priority = {'24-2': 1, '10-2': 2, '30-2': 3}
-        hvf_clean.loc[:, 'priority'] = hvf_clean['Field_Size'].map(priority)
-        hvf_sorted = hvf_clean.sort_values(by=['RID_Observation', 'priority'])
-        result = hvf_sorted.groupby(['RID_Observation', 'Image_Side']).first().reset_index()
+        hvf_clean.loc[:, 'priority'] = hvf_clean['OCR_HVF.Field_Size'].map(priority)
+        hvf_sorted = hvf_clean.sort_values(by=['Observation.RID', 'priority'])
+        result = hvf_sorted.groupby(['Observation.RID', 'OCR_HVF.Image_Side']).first().reset_index()
         result = result.drop(columns=['priority'])
         return result
 
+
     @staticmethod
     def closest_to_fundus(report, fundus):
-        report['date_of_encounter'] = pd.to_datetime(report['date_of_encounter']).dt.tz_localize(None)
-        fundus['date_of_encounter'] = pd.to_datetime(fundus['date_of_encounter']).dt.tz_localize(None)
+        report['Observation.date_of_encounter'] = pd.to_datetime(report['Observation.date_of_encounter']).dt.tz_localize(None)
+        fundus['Observation.date_of_encounter'] = pd.to_datetime(fundus['Observation.date_of_encounter']).dt.tz_localize(None)
         report_match = pd.DataFrame()
 
         def find_closest_date(target_date, dates):
             return min(dates, key=lambda d: abs(d - target_date))
 
         for idx, row in fundus.iterrows():
-            rid = row['RID_Subject']
-            target_date = row['date_of_encounter']
+            rid = row['Subject.RID']
+            target_date = row['Observation.date_of_encounter']
 
             for side in ['Left', 'Right']:
-                filtered_data = report[(report['RID_Subject'] == rid) & (report['Image_Side'] == side)]
+                filtered_data = report[(report['Subject.RID'] == rid) & (report['OCR_HVF.Image_Side'] == side)]
                 if not filtered_data.empty:
                     # Find the closest date entry
-                    if sum(filtered_data['date_of_encounter'].isna()) > 0:
+                    if sum(filtered_data['Observation.date_of_encounter'].isna()) > 0:
                         report_match = pd.concat([report_match, filtered_data.iloc[[0]]])
                     else:
-                        closest_date = find_closest_date(target_date, filtered_data['date_of_encounter'])
-                        closest_entries = filtered_data[filtered_data['date_of_encounter'] == closest_date]
+                        closest_date = find_closest_date(target_date, filtered_data['Observation.date_of_encounter'])
+                        closest_entries = filtered_data[filtered_data['Observation.date_of_encounter'] == closest_date]
                         report_match = pd.concat([report_match, closest_entries])
         return report_match
 
     def extract_modality(self, ds_bag: DatasetBag) -> dict[str, pd.DataFrame]:
-        sys_cols = ['RCT', 'RMT', 'RCB', 'RMB']
-        subject = ds_bag.get_table_as_dataframe('Subject').drop(columns=sys_cols)
-        observation = ds_bag.get_table_as_dataframe('Observation')[['RID', 'Observation_ID', 'Subject', 'date_of_encounter']]
-        image = ds_bag.get_table_as_dataframe('Image').drop(columns=sys_cols)
-        observation_clinic_asso = ds_bag.get_table_as_dataframe('Clinical_Records_Observation').drop(columns=sys_cols)
-        clinic = ds_bag.get_table_as_dataframe('Clinical_Records').drop(columns=sys_cols)
-        severity = ds_bag.get_table_as_dataframe('Execution_Clinical_Records_Glaucoma_Severity')[['Clinical_Records', 'ICD_Severity_Label']]
-        report_hvf = ds_bag.get_table_as_dataframe('Report_HVF').drop(columns=sys_cols)
-        report_rnfl = ds_bag.get_table_as_dataframe('Report_RNFL').drop(columns=sys_cols)
-        rnfl_ocr = ds_bag.get_table_as_dataframe('OCR_RNFL').drop(columns=sys_cols)
-        hvf_ocr = ds_bag.get_table_as_dataframe('OCR_HVF').drop(columns=sys_cols)
-
-        subject_observation = pd.merge(subject, observation, left_on='RID', right_on='Subject', how='left',
-                                       suffixes=('_Subject', '_Observation')).drop(columns=['Subject'])
+        # Image
+        image = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
+        fundus = image[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity', 
+                        'Observation.RID', 'Observation.Observation_ID', 'Observation.date_of_encounter']].drop_duplicates()
 
         # Report_HVF
-        subject_observation_hvf = pd.merge(subject_observation, report_hvf,
-                                              left_on='RID_Observation',
-                                              right_on='Observation',
-                                              suffixes=("subject_observation_for_HVF", "hvf")).drop(
-            columns=['Observation']).rename(columns={'RID': 'RID_HVF'})
-
-        hvf = pd.merge(subject_observation_hvf, hvf_ocr,
-                       left_on='RID_HVF',
-                       right_on='Report',
-                       suffixes=("_subject_observation_for_HVF_report", "_HVF_OCR"),
-                       how='left').rename(columns={'RID': 'RID_HVF_OCR'}).drop(columns=['URL', 'Description',
-                                                                                        'Length', 'MD5', 'Report'])
-
-        hvf = self._select_24_2(hvf)
+        hvf_frame = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+        hvf = self._select_24_2(hvf_frame)
+        hvf_match = self.closest_to_fundus(hvf, fundus)
 
         # Report_RNFL
-        subject_observation_rnfl = pd.merge(subject_observation, report_rnfl,
-                                              left_on='RID_Observation',
-                                              right_on='Observation',
-                                              suffixes=("subject_observation_for_rnfl", "rnfl")).drop(
-            columns=['Observation']).rename(columns={'RID': 'RID_RNFL'})
-
-        rnfl = pd.merge(subject_observation_rnfl, rnfl_ocr,
-                        left_on='RID_RNFL',
-                        right_on='RNFL',
-                        suffixes=("_subject_observation_for_RNFL_report", "_RNFL_OCR"),
-                        how='left').rename(columns={'RID': 'RID_RNFL_OCR'}).drop(columns=['URL', 'Description',
-                                                                                          'Length', 'MD5', 'RNFL'])
-
+        rnfl = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
         def highest_signal_strength(rnfl):
-            rnfl_clean = rnfl.dropna(subset=['RID_RNFL_OCR', 'Signal_Strength'])
-            idx = rnfl_clean.groupby(['RID_Observation', 'Image_Side'])['Signal_Strength'].idxmax()
+            rnfl_clean = rnfl.dropna(subset=['OCR_RNFL.RID', 'OCR_RNFL.Signal_Strength'])
+            idx = rnfl_clean.groupby(['Observation.RID', 'OCR_RNFL.Image_Side'])['OCR_RNFL.Signal_Strength'].idxmax()
             result = rnfl_clean.loc[idx]
             return result
-
         rnfl = highest_signal_strength(rnfl)
-        # Image
-        image = pd.merge(subject_observation, image,
-                         left_on='RID_Observation',
-                         right_on='Observation',
-                         suffixes=("_subject_observation_for_image",
-                                   "_Image")).rename(columns={'RID': 'RID_Image'}).drop(columns=['Observation'])
-
-        # Select the observation according fundus date of encounter
-        fundus = image[['RID_Subject', 'Subject_ID', 'Subject_Gender', 'Subject_Ethnicity', 'RID_Observation', 'Observation_ID',
-                        'date_of_encounter']].drop_duplicates()
-
-        hvf_match = self.closest_to_fundus(hvf, fundus)
         rnfl_match = self.closest_to_fundus(rnfl, fundus)
         
         # select clinic records by the date of encounter (on the fundus date of encounter)
-        subject_obs_clinic = (pd.merge(fundus,
-                                       observation_clinic_asso,
-                                       left_on='RID_Observation',
-                                       right_on='Observation',
-                                       how='left').drop(columns=['RID', 'Observation']))
-        subject_obs_clinic_data = pd.merge(subject_obs_clinic,
-                                           clinic,
-                                           left_on='Clinical_Records',
-                                           right_on='RID',
-                                           suffixes=("", "_Clinic"),
-                                           how='left').drop(
-            columns=['Clinical_Records']).rename(columns={'RID': 'RID_Clinic',
-                                                          'date_of_encounter': 'date_of_encounter_Observation',
-                                                          'Date_of_Encounter': 'date_of_encounter_Clinic'})
-        subject_obs_clinic_severe_data = pd.merge(subject_obs_clinic_data, severity,
-                                           left_on='RID_Clinic',
-                                           right_on='Clinical_Records',
-                                           how='left').drop(columns=['Clinical_Records'])
-        
-        clinic_match = subject_obs_clinic_severe_data[
-            ['RID_Subject', 'Subject_ID', 'Subject_Gender', 'Subject_Ethnicity', 'RID_Observation',
-             'Observation_ID', 'date_of_encounter_Observation', 'RID_Clinic',
-             'date_of_encounter_Clinic', 'LogMAR_VA', 'Visual_Acuity_Numerator', 'IOP',
-             'Refractive_Error', 'CCT', 'CDR', 'Gonioscopy', 'Condition_Display', 'Provider',
-             'Clinical_ID', 'Powerform_Laterality', 'ICD_Condition_Label', 'ICD_Severity_Label']]
-
-        rnfl_match.rename(columns={'date_of_encounter': 'date_of_encounter_RNFL'}, inplace=True)
-        hvf_match.rename(columns={'date_of_encounter': 'date_of_encounter_HVF'}, inplace=True)
-        fundus.rename(columns={'date_of_encounter': 'date_of_encounter_Fundus'}, inplace=True)
+        clinic = ds_bag.denormalize_as_dataframe(include_tables=['Observation', 'Clinical_Records_Observation', 'Clinical_Records', 'Execution_Clinical_Records_Glaucoma_Severity'])
+        clinic_match = fundus.merge(clinic, on=['Observation.RID','Observation.Observation_ID', 'Observation.date_of_encounter'], how='left')
+        clinic_match = clinic_match[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity', 
+                                    'Observation.RID', 'Observation.Observation_ID', 'Observation.date_of_encounter', 
+                                    'Clinical_Records.RID', 'Clinical_Records.Date_of_Encounter', 'Clinical_Records.LogMAR_VA',
+                                    'Clinical_Records.Visual_Acuity_Numerator', 'Clinical_Records.IOP', 
+                                    'Clinical_Records.Refractive_Error', 'Clinical_Records.CCT',
+                                    'Clinical_Records.CDR', 'Clinical_Records.Gonioscopy','Clinical_Records.Condition_Display', 
+                                    'Clinical_Records.Provider', 'Clinical_Records.Clinical_ID', 'Clinical_Records.ICD_Condition_Label',
+                                    'Clinical_Records.Powerform_Laterality', 'Execution_Clinical_Records_Glaucoma_Severity.ICD_Severity_Label'
+                                    ]]
         return {"Clinic": clinic_match, "HVF": hvf_match, "RNFL": rnfl_match, "Fundus": fundus}
 
     def multimodal_wide(self, ds_bag: DatasetBag):
         # Todo add fundus image paths
         modality_df = self.extract_modality(ds_bag)
-        clinic = modality_df['Clinic'].rename(columns={'Powerform_Laterality': 'Image_Side'})
-        rnfl = modality_df['RNFL']
-        fundus = modality_df['Fundus']
-        hvf = modality_df['HVF']
+        clinic = modality_df['Clinic'].rename(columns={'Clinical_Records.Powerform_Laterality': 'Image_Side'})
+        rnfl = modality_df['RNFL'].rename(columns={'OCR_RNFL.Image_Side': 'Image_Side'})
+        fundus = modality_df['Fundus'] #.rename(columns={'Observation.date_of_encounter': 'date_of_encounter_Fundus'})
+        hvf = modality_df['HVF'].rename(columns={'OCR_HVF.Image_Side': 'Image_Side'})
         
         rid_subjects = pd.concat([
-            clinic['RID_Subject'],
-            rnfl['RID_Subject'],
-            fundus['RID_Subject'],
-            hvf['RID_Subject']
+            clinic['Subject.RID'],
+            rnfl['Subject.RID'],
+            fundus['Subject.RID'],
+            hvf['Subject.RID']
         ]).drop_duplicates().reset_index(drop=True)
         sides = pd.DataFrame({'Image_Side': ['Right', 'Left']})
         expanded_subjects = rid_subjects.to_frame().merge(sides, how='cross')
         
-        clinic.drop(columns=['RID_Observation', 'Observation_ID', 'date_of_encounter_Observation'], inplace=True)
-        rnfl.drop(columns=['RID_Observation', 'Observation_ID'], inplace=True)
-        hvf.drop(columns=['RID_Observation', 'Observation_ID'], inplace=True)
-        fundus.drop(columns=['RID_Observation', 'Observation_ID'], inplace=True)
-        multimodal_wide = pd.merge(expanded_subjects, fundus, how='left', on=['RID_Subject'])
+        clinic.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.date_of_encounter',], inplace=True)
+        rnfl.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.Subject'], inplace=True)
+        hvf.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.Subject'], inplace=True)
+        fundus.drop(columns=['Observation.RID', 'Observation.Observation_ID'], inplace=True)
+        multimodal_wide = pd.merge(expanded_subjects, fundus, how='left', on=['Subject.RID'])
         multimodal_wide = pd.merge(multimodal_wide, clinic, how='left',
-                                   on=['RID_Subject', 'Image_Side', 'Subject_ID', 'Subject_Gender', 'Subject_Ethnicity'])
+                                   on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
         multimodal_wide = pd.merge(multimodal_wide, hvf, how='left',
-                                   on=['RID_Subject', 'Subject_ID', 'Subject_Gender', 'Subject_Ethnicity', 'Image_Side'])
+                                   on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
         multimodal_wide = pd.merge(multimodal_wide, rnfl, how='left',
-                                   on=['RID_Subject', 'Subject_ID', 'Subject_Gender', 'Subject_Ethnicity', 'Image_Side'],
-                                   suffixes=('_HVF', '_RNFL'))
+                                   on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
         return multimodal_wide
 
     def get_multimodal_tf_dataset(self, ds_bag: DatasetBag):
