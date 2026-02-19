@@ -12,6 +12,7 @@ import logging
 from deriva_ml import DerivaML, DerivaMLException
 from deriva_ml.core.definitions import ML_SCHEMA
 from deriva_ml.dataset import DatasetBag
+from deriva_ml.execution.execution import Execution
 
 class EyeAIException(DerivaMLException):
     def __init__(self, msg=""):
@@ -375,24 +376,24 @@ class EyeAI(DerivaML):
         return output_dir, train_dir, train_csv, val_dir, val_csv, test_dir, test_csv
 
 
-    def plot_roc(self, configuration_record, data: pd.DataFrame) -> Path:
+    def plot_roc(self, execution: Execution, data: pd.DataFrame) -> Path:
         """
         Plot Receiver Operating Characteristic (ROC) curve based on prediction results. Save the plot values into a csv file.
 
         Parameters:
-        - data (pd.DataFrame): DataFrame containing prediction results with columns 'True Condition_Condition_Condition_Condition_Label' and
+        - execution (Execution): The current execution context for asset tracking.
+        - data (pd.DataFrame): DataFrame containing prediction results with columns 'True Label' and
         'Probability Score'.
         Returns:
             Path: Path to the saved csv file of ROC plot values .
 
         """
-        output_path = configuration_record.execution_asset_path("ROC")
+        roc_csv_path = execution.asset_file_path(asset_name="ROC", file_name="roc_plot.csv")
         pred_result = pd.read_csv(data)
         y_true = pred_result['True Label']
         scores = pred_result['Probability Score']
         fpr, tpr, thresholds = roc_curve(y_true, scores)
         roc_df = pd.DataFrame({'False Positive Rate': fpr, 'True Positive Rate': tpr})
-        roc_csv_path = output_path / Path("roc_plot.csv")
         roc_df.to_csv(roc_csv_path, index=False)
         # show plot in notebook
         plt.plot(fpr, tpr)
