@@ -6,9 +6,10 @@ authors = [
 description = "ML code for the EYE-AI project"
 dynamic = ["version"]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
-    "deriva-ml >= 1.17.7",
+    "deriva",
+    "deriva-ml",
     "pandas",
     "pillow",
     "matplotlib",
@@ -30,6 +31,10 @@ lint = [
 [tool.uv]
 python-preference = "only-managed"
 index-strategy = "unsafe-any-match"
+
+[tool.uv.sources]
+deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml", branch = "main" }
+deriva = { git = "https://github.com/informatics-isi-edu/deriva-py", branch = "2.0-dev" }
 
 [[tool.uv.index]]
 name = "github"

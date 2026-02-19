@@ -54,7 +54,8 @@ class EyeAI(DerivaML):
 
     def __init__(self, hostname: str = 'www.eye-ai.org',
                  catalog_id: str = 'eye-ai',
-                 domain_schema: str | None = None,
+                 domain_schemas: str | set[str] | None = None,
+                 default_schema: str | None = None,
                  project_name: str | None = None,
                  cache_dir: str | Path | None = None,
                  working_dir: str | Path | None = None,
@@ -62,21 +63,24 @@ class EyeAI(DerivaML):
                  ml_schema: str = ML_SCHEMA,
                  logging_level=logging.WARNING,
                  deriva_logging_level=logging.WARNING,
-                 credential=None,
-                 use_minid: bool = True,
-                 check_auth: bool = True):
+                 credential: dict | None = None,
+                 s3_bucket: str | None = None,
+                 use_minid: bool | None = None,
+                 check_auth: bool = True,
+                 clean_execution_dir: bool = True):
         """
         Initializes the EyeAI object.
 
         Args:
         - hostname (str): The hostname of the server where the catalog is located.
-        - catalog_number (str): The catalog number or name.
+        - catalog_id (str): The catalog number or name.
         """
 
         super().__init__(
             hostname=hostname,
             catalog_id=catalog_id,
-            domain_schema=domain_schema,
+            domain_schemas=domain_schemas,
+            default_schema=default_schema,
             ml_schema=ml_schema,
             project_name=project_name,
             cache_dir=cache_dir,
@@ -85,8 +89,10 @@ class EyeAI(DerivaML):
             logging_level=logging_level,
             deriva_logging_level=deriva_logging_level,
             credential=credential,
+            s3_bucket=s3_bucket,
             use_minid=use_minid,
-            check_auth=check_auth
+            check_auth=check_auth,
+            clean_execution_dir=clean_execution_dir
         )
 
     @staticmethod
@@ -126,10 +132,10 @@ class EyeAI(DerivaML):
         """
 
         sys_cols = ['RCT', 'RMT', 'RCB', 'RMB']
-        subject = ds_bag.get_table_as_dataframe('Subject').rename(columns={'RID': 'Subject_RID'}).drop(columns=sys_cols)
-        observation = ds_bag.get_table_as_dataframe('Observation').rename(columns={'RID': 'Observation_RID'}).drop(columns=sys_cols)
-        image = ds_bag.get_table_as_dataframe('Image').rename(columns={'RID': 'Image_RID'}).drop(columns=sys_cols)
-        diagnosis = ds_bag.get_table_as_dataframe('Image_Diagnosis').rename(columns={'RID': 'Diagnosis_RID'}).drop(columns=['RCT', 'RMT', 'RMB'])
+        subject = pd.DataFrame(list(ds_bag.get_table_as_dict('Subject'))).rename(columns={'RID': 'Subject_RID'}).drop(columns=sys_cols)
+        observation = pd.DataFrame(list(ds_bag.get_table_as_dict('Observation'))).rename(columns={'RID': 'Observation_RID'}).drop(columns=sys_cols)
+        image = pd.DataFrame(list(ds_bag.get_table_as_dict('Image'))).rename(columns={'RID': 'Image_RID'}).drop(columns=sys_cols)
+        diagnosis = pd.DataFrame(list(ds_bag.get_table_as_dict('Image_Diagnosis'))).rename(columns={'RID': 'Diagnosis_RID'}).drop(columns=['RCT', 'RMT', 'RMB'])
         
         merge_obs = pd.merge(subject, observation, left_on='Subject_RID', right_on='Subject', how='left')
         merge_image = pd.merge(merge_obs, image, left_on='Observation_RID', right_on='Observation', how='left')
@@ -216,7 +222,7 @@ class EyeAI(DerivaML):
         Returns:
         - str: Path to the generated CSV file containing filtered images.
         """
-        full_set = ds_bag.get_table_as_dataframe('Image')
+        full_set = pd.DataFrame(list(ds_bag.get_table_as_dict('Image')))
         dataset_field_2 = full_set[full_set['Image_Angle'] == "2"]
         return dataset_field_2
 
@@ -268,10 +274,10 @@ class EyeAI(DerivaML):
         out_path_glaucoma = output_dir / 'Suspected_Glaucoma'
         out_path_glaucoma.mkdir(parents=True, exist_ok=True)
         
-        image_annot_df = ds_bag.get_table_as_dataframe('Annotation')
-        image_df = ds_bag.get_table_as_dataframe('Image')
-        diagnosis = ds_bag.get_table_as_dataframe('Image_Diagnosis')
-        image_bounding_box_df = ds_bag.get_table_as_dataframe('Fundus_Bounding_Box')
+        image_annot_df = pd.DataFrame(list(ds_bag.get_table_as_dict('Annotation')))
+        image_df = pd.DataFrame(list(ds_bag.get_table_as_dict('Image')))
+        diagnosis = pd.DataFrame(list(ds_bag.get_table_as_dict('Image_Diagnosis')))
+        image_bounding_box_df = pd.DataFrame(list(ds_bag.get_table_as_dict('Fundus_Bounding_Box')))
 
         for index, row in image_annot_df.iterrows():
             image_rid = row['Image']
@@ -480,16 +486,16 @@ class EyeAI(DerivaML):
 
     def extract_modality(self, ds_bag: DatasetBag) -> dict[str, pd.DataFrame]:
         sys_cols = ['RCT', 'RMT', 'RCB', 'RMB']
-        subject = ds_bag.get_table_as_dataframe('Subject').drop(columns=sys_cols)
-        observation = ds_bag.get_table_as_dataframe('Observation')[['RID', 'Observation_ID', 'Subject', 'date_of_encounter']]
-        image = ds_bag.get_table_as_dataframe('Image').drop(columns=sys_cols)
-        observation_clinic_asso = ds_bag.get_table_as_dataframe('Clinical_Records_Observation').drop(columns=sys_cols)
-        clinic = ds_bag.get_table_as_dataframe('Clinical_Records').drop(columns=sys_cols)
-        severity = ds_bag.get_table_as_dataframe('Execution_Clinical_Records_Glaucoma_Severity')[['Clinical_Records', 'ICD_Severity_Label']]
-        report_hvf = ds_bag.get_table_as_dataframe('Report_HVF').drop(columns=sys_cols)
-        report_rnfl = ds_bag.get_table_as_dataframe('Report_RNFL').drop(columns=sys_cols)
-        rnfl_ocr = ds_bag.get_table_as_dataframe('OCR_RNFL').drop(columns=sys_cols)
-        hvf_ocr = ds_bag.get_table_as_dataframe('OCR_HVF').drop(columns=sys_cols)
+        subject = pd.DataFrame(list(ds_bag.get_table_as_dict('Subject'))).drop(columns=sys_cols)
+        observation = pd.DataFrame(list(ds_bag.get_table_as_dict('Observation')))[['RID', 'Observation_ID', 'Subject', 'date_of_encounter']]
+        image = pd.DataFrame(list(ds_bag.get_table_as_dict('Image'))).drop(columns=sys_cols)
+        observation_clinic_asso = pd.DataFrame(list(ds_bag.get_table_as_dict('Clinical_Records_Observation'))).drop(columns=sys_cols)
+        clinic = pd.DataFrame(list(ds_bag.get_table_as_dict('Clinical_Records'))).drop(columns=sys_cols)
+        severity = pd.DataFrame(list(ds_bag.get_table_as_dict('Execution_Clinical_Records_Glaucoma_Severity')))[['Clinical_Records', 'ICD_Severity_Label']]
+        report_hvf = pd.DataFrame(list(ds_bag.get_table_as_dict('Report_HVF'))).drop(columns=sys_cols)
+        report_rnfl = pd.DataFrame(list(ds_bag.get_table_as_dict('Report_RNFL'))).drop(columns=sys_cols)
+        rnfl_ocr = pd.DataFrame(list(ds_bag.get_table_as_dict('OCR_RNFL'))).drop(columns=sys_cols)
+        hvf_ocr = pd.DataFrame(list(ds_bag.get_table_as_dict('OCR_HVF'))).drop(columns=sys_cols)
 
         subject_observation = pd.merge(subject, observation, left_on='RID', right_on='Subject', how='left',
                                        suffixes=('_Subject', '_Observation')).drop(columns=['Subject'])
