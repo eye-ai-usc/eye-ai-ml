@@ -14,6 +14,7 @@ dependencies = [
     "pillow",
     "matplotlib",
     "scikit-learn",
+    "ipykernel>=7.2.0",
 ]
 
 [dependency-groups]
@@ -27,14 +28,14 @@ dev = [
 lint = [
     "ruff>=0.12.7",
 ]
+jupyter = ["ipykernel", "jupyter"] 
 
 [tool.uv]
 python-preference = "only-managed"
 index-strategy = "unsafe-any-match"
 
 [tool.uv.sources]
-deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml", branch = "main" }
-deriva = { git = "https://github.com/informatics-isi-edu/deriva-py", branch = "2.0-dev" }
+deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml"}
 
 [[tool.uv.index]]
 name = "github"
