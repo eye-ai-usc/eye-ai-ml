@@ -454,6 +454,8 @@ class EyeAI(DerivaML):
 
     @staticmethod
     def _select_24_2(hvf: pd.DataFrame) -> pd.DataFrame:
+        if 'OCR_HVF.RID' not in hvf.columns:
+            return hvf
         hvf_clean = hvf.dropna(subset=['OCR_HVF.RID'])
         priority = {'24-2': 1, '10-2': 2, '30-2': 3}
         hvf_clean.loc[:, 'priority'] = hvf_clean['OCR_HVF.Field_Size'].map(priority)
@@ -464,27 +466,29 @@ class EyeAI(DerivaML):
 
 
     @staticmethod
-    def closest_to_fundus(report, fundus):
-        report['Observation.date_of_encounter'] = pd.to_datetime(report['Observation.date_of_encounter']).dt.tz_localize(None)
-        fundus['Observation.date_of_encounter'] = pd.to_datetime(fundus['Observation.date_of_encounter']).dt.tz_localize(None)
-        report_match = pd.DataFrame()
+    def closest_to_fundus(report, fundus, side_col='OCR_HVF.Image_Side'):
+        report = report.copy()
+        fundus = fundus.copy()
+        report['Observation.Date_of_Encounter'] = pd.to_datetime(report['Observation.Date_of_Encounter']).dt.tz_localize(None)
+        fundus['Observation.Date_of_Encounter'] = pd.to_datetime(fundus['Observation.Date_of_Encounter']).dt.tz_localize(None)
+        report_match = pd.DataFrame(columns=report.columns)
 
         def find_closest_date(target_date, dates):
             return min(dates, key=lambda d: abs(d - target_date))
 
         for idx, row in fundus.iterrows():
             rid = row['Subject.RID']
-            target_date = row['Observation.date_of_encounter']
+            target_date = row['Observation.Date_of_Encounter']
 
             for side in ['Left', 'Right']:
-                filtered_data = report[(report['Subject.RID'] == rid) & (report['OCR_HVF.Image_Side'] == side)]
+                filtered_data = report[(report['Subject.RID'] == rid) & (report[side_col] == side)]
                 if not filtered_data.empty:
                     # Find the closest date entry
-                    if sum(filtered_data['Observation.date_of_encounter'].isna()) > 0:
+                    if sum(filtered_data['Observation.Date_of_Encounter'].isna()) > 0:
                         report_match = pd.concat([report_match, filtered_data.iloc[[0]]])
                     else:
-                        closest_date = find_closest_date(target_date, filtered_data['Observation.date_of_encounter'])
-                        closest_entries = filtered_data[filtered_data['Observation.date_of_encounter'] == closest_date]
+                        closest_date = find_closest_date(target_date, filtered_data['Observation.Date_of_Encounter'])
+                        closest_entries = filtered_data[filtered_data['Observation.Date_of_Encounter'] == closest_date]
                         report_match = pd.concat([report_match, closest_entries])
         return report_match
 
@@ -492,12 +496,12 @@ class EyeAI(DerivaML):
         # Image
         image = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
         fundus = image[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity',
-                        'Observation.RID', 'Observation.Observation_ID', 'Observation.date_of_encounter']].drop_duplicates()
+                        'Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter']].drop_duplicates()
 
         # Report_HVF
         hvf_frame = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
         hvf = self._select_24_2(hvf_frame)
-        hvf_match = self.closest_to_fundus(hvf, fundus)
+        hvf_match = self.closest_to_fundus(hvf, fundus, side_col='OCR_HVF.Image_Side')
 
         # Report_RNFL
         rnfl = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
@@ -507,19 +511,20 @@ class EyeAI(DerivaML):
             result = rnfl_clean.loc[idx]
             return result
         rnfl = highest_signal_strength(rnfl)
-        rnfl_match = self.closest_to_fundus(rnfl, fundus)
-        
+        rnfl_match = self.closest_to_fundus(rnfl, fundus, side_col='OCR_RNFL.Image_Side')
+
         # select clinic records by the date of encounter (on the fundus date of encounter)
-        clinic = ds_bag.denormalize_as_dataframe(include_tables=['Observation', 'Clinical_Records_Observation', 'Clinical_Records', 'Execution_Clinical_Records_Glaucoma_Severity'])
-        clinic_match = fundus.merge(clinic, on=['Observation.RID','Observation.Observation_ID', 'Observation.date_of_encounter'], how='left')
-        clinic_match = clinic_match[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity', 
-                                    'Observation.RID', 'Observation.Observation_ID', 'Observation.date_of_encounter', 
+        clinic = ds_bag.denormalize_as_dataframe(include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records'])
+        clinic_match = fundus.merge(clinic, on=['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity',
+                                                'Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter'], how='left')
+        clinic_match = clinic_match[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity',
+                                    'Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter',
                                     'Clinical_Records.RID', 'Clinical_Records.Date_of_Encounter', 'Clinical_Records.LogMAR_VA',
-                                    'Clinical_Records.Visual_Acuity_Numerator', 'Clinical_Records.IOP', 
+                                    'Clinical_Records.Visual_Acuity_Numerator', 'Clinical_Records.IOP',
                                     'Clinical_Records.Refractive_Error', 'Clinical_Records.CCT',
-                                    'Clinical_Records.CDR', 'Clinical_Records.Gonioscopy','Clinical_Records.Condition_Display', 
+                                    'Clinical_Records.CDR', 'Clinical_Records.Gonioscopy','Clinical_Records.Condition_Display',
                                     'Clinical_Records.Provider', 'Clinical_Records.Clinical_ID', 'Clinical_Records.ICD_Condition_Label',
-                                    'Clinical_Records.Powerform_Laterality', 'Execution_Clinical_Records_Glaucoma_Severity.ICD_Severity_Label'
+                                    'Clinical_Records.Powerform_Laterality'
                                     ]]
         return {"Clinic": clinic_match, "HVF": hvf_match, "RNFL": rnfl_match, "Fundus": fundus}
 
@@ -540,9 +545,9 @@ class EyeAI(DerivaML):
         sides = pd.DataFrame({'Image_Side': ['Right', 'Left']})
         expanded_subjects = rid_subjects.to_frame().merge(sides, how='cross')
         
-        clinic.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.date_of_encounter',], inplace=True)
-        rnfl.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.Subject'], inplace=True)
-        hvf.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.Subject'], inplace=True)
+        clinic.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter'], inplace=True)
+        rnfl.drop(columns=[c for c in rnfl.columns if c.startswith('Observation.')], inplace=True)
+        hvf.drop(columns=[c for c in hvf.columns if c.startswith('Observation.')], inplace=True)
         fundus.drop(columns=['Observation.RID', 'Observation.Observation_ID'], inplace=True)
         multimodal_wide = pd.merge(expanded_subjects, fundus, how='left', on=['Subject.RID'])
         multimodal_wide = pd.merge(multimodal_wide, clinic, how='left',
