@@ -12,6 +12,7 @@ import logging
 from deriva_ml import DerivaML, DerivaMLException
 from deriva_ml.core.definitions import ML_SCHEMA
 from deriva_ml.dataset import DatasetBag
+from deriva_ml.dataset.aux_classes import DatasetSpec
 from deriva_ml.execution.execution import Execution
 
 class EyeAIException(DerivaMLException):
@@ -557,6 +558,153 @@ class EyeAI(DerivaML):
         multimodal_wide = pd.merge(multimodal_wide, rnfl, how='left',
                                    on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
         return multimodal_wide
+
+    def multimodal_wide_from_subject_bag(
+        self,
+        image_dataset: DatasetSpec,
+        subject_bag: DatasetBag,
+    ) -> pd.DataFrame:
+        """Compute the multimodal wide table directly from an image dataset and a subject
+        bag, without saving any records back to the catalog.
+
+        Use this as a workaround when the enriched image dataset cannot be downloaded due
+        to the deep FK traversal timeout bug in deriva_ml. Switch to multimodal_wide once
+        the dataset has been enriched via add_multimodal_measurements and the bug is fixed.
+
+        Args:
+            image_dataset: DatasetSpec for the image dataset (provides fundus anchor).
+            subject_bag: DatasetBag from a subject dataset covering the same subjects.
+
+        Returns:
+            Wide DataFrame with one row per subject per side, joining fundus, HVF, RNFL,
+            and Clinical Records.
+        """
+        image_bag = self.download_dataset_bag(image_dataset)
+        image_frame = image_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
+        fundus = image_frame[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender',
+                               'Subject.Subject_Ethnicity', 'Observation.RID',
+                               'Observation.Observation_ID', 'Observation.Date_of_Encounter']].drop_duplicates()
+
+        hvf_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+        hvf = self._select_24_2(hvf_frame)
+        hvf_matched = self.closest_to_fundus(hvf, fundus, side_col='OCR_HVF.Image_Side')
+
+        rnfl_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
+        def highest_signal_strength(rnfl):
+            rnfl_clean = rnfl.dropna(subset=['OCR_RNFL.RID', 'OCR_RNFL.Signal_Strength'])
+            idx = rnfl_clean.groupby(['Observation.RID', 'OCR_RNFL.Image_Side'])['OCR_RNFL.Signal_Strength'].idxmax()
+            return rnfl_clean.loc[idx]
+        rnfl_matched = self.closest_to_fundus(highest_signal_strength(rnfl_frame), fundus, side_col='OCR_RNFL.Image_Side')
+
+        clinic_frame = subject_bag.denormalize_as_dataframe(
+            include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records']
+        )
+        clinic_matched = self.closest_to_fundus(clinic_frame, fundus, side_col='Clinical_Records.Powerform_Laterality')
+
+        clinic = clinic_matched.rename(columns={'Clinical_Records.Powerform_Laterality': 'Image_Side'})
+        rnfl = rnfl_matched.rename(columns={'OCR_RNFL.Image_Side': 'Image_Side'})
+        hvf = hvf_matched.rename(columns={'OCR_HVF.Image_Side': 'Image_Side'})
+
+        rid_subjects = pd.concat([
+            clinic['Subject.RID'],
+            rnfl['Subject.RID'],
+            fundus['Subject.RID'],
+            hvf['Subject.RID']
+        ]).drop_duplicates().reset_index(drop=True)
+        sides = pd.DataFrame({'Image_Side': ['Right', 'Left']})
+        expanded_subjects = rid_subjects.to_frame().merge(sides, how='cross')
+
+        clinic.drop(columns=['Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter'], inplace=True)
+        rnfl.drop(columns=[c for c in rnfl.columns if c.startswith('Observation.')], inplace=True)
+        hvf.drop(columns=[c for c in hvf.columns if c.startswith('Observation.')], inplace=True)
+        fundus.drop(columns=['Observation.RID', 'Observation.Observation_ID'], inplace=True)
+
+        result = pd.merge(expanded_subjects, fundus, how='left', on=['Subject.RID'])
+        result = pd.merge(result, clinic, how='left',
+                          on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
+        result = pd.merge(result, hvf, how='left',
+                          on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
+        result = pd.merge(result, rnfl, how='left',
+                          on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
+        return result
+
+    def add_multimodal_measurements(
+        self,
+        image_dataset: DatasetSpec,
+        subject_bag: DatasetBag,
+        execution_rid: str | None = None,
+    ) -> dict[str, int]:
+        """Add matched HVF, RNFL, and Clinical Records from a subject dataset bag as
+        members of an image dataset, making the image dataset self-contained for
+        multimodal analysis.
+
+        The selection logic mirrors extract_modality: 24-2 priority for HVF, highest
+        signal strength for RNFL, and Clinical Records all matched to the closest fundus
+        date per subject and side.
+
+        Report_HVF, Report_RNFL, and Clinical_Records are registered as dataset element
+        types if not already registered (one-time catalog schema change).
+
+        Args:
+            image_dataset: DatasetSpec for the image dataset to add members to.
+            subject_bag: DatasetBag from a subject dataset covering the same subjects.
+            execution_rid: Optional execution RID for provenance tracking.
+
+        Returns:
+            dict mapping table name to number of member RIDs added.
+        """
+        # Get fundus frame from image dataset bag
+        image_bag = self.download_dataset_bag(image_dataset)
+        image_frame = image_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
+        fundus = image_frame[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender',
+                               'Subject.Subject_Ethnicity', 'Observation.RID',
+                               'Observation.Observation_ID', 'Observation.Date_of_Encounter']].drop_duplicates()
+
+        # Match HVF from subject bag
+        hvf_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+        hvf = self._select_24_2(hvf_frame)
+        hvf_matched = self.closest_to_fundus(hvf, fundus, side_col='OCR_HVF.Image_Side')
+
+        # Match RNFL from subject bag
+        rnfl_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
+        def highest_signal_strength(rnfl):
+            rnfl_clean = rnfl.dropna(subset=['OCR_RNFL.RID', 'OCR_RNFL.Signal_Strength'])
+            idx = rnfl_clean.groupby(['Observation.RID', 'OCR_RNFL.Image_Side'])['OCR_RNFL.Signal_Strength'].idxmax()
+            return rnfl_clean.loc[idx]
+        rnfl_matched = self.closest_to_fundus(highest_signal_strength(rnfl_frame), fundus, side_col='OCR_RNFL.Image_Side')
+
+        # Match Clinical Records from subject bag: exact observation match first,
+        # falling back to closest date per subject per side
+        clinic_frame = subject_bag.denormalize_as_dataframe(
+            include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records']
+        )
+        clinic_matched = self.closest_to_fundus(clinic_frame, fundus, side_col='Clinical_Records.Powerform_Laterality')
+
+        # Collect selected RIDs per table
+        members: dict[str, list] = {}
+        hvf_rids = hvf_matched['Report_HVF.RID'].dropna().unique().tolist() if 'Report_HVF.RID' in hvf_matched.columns else []
+        rnfl_rids = rnfl_matched['Report_RNFL.RID'].dropna().unique().tolist() if 'Report_RNFL.RID' in rnfl_matched.columns else []
+        clinic_rids = clinic_matched['Clinical_Records.RID'].dropna().unique().tolist() if 'Clinical_Records.RID' in clinic_matched.columns else []
+
+        if hvf_rids:
+            members['Report_HVF'] = hvf_rids
+        if rnfl_rids:
+            members['Report_RNFL'] = rnfl_rids
+        if clinic_rids:
+            members['Clinical_Records'] = clinic_rids
+
+        if not members:
+            return {}
+
+        # Register tables as element types (idempotent)
+        for table in members:
+            self.add_dataset_element_type(table)
+
+        # Add members to the live dataset
+        dataset = self.lookup_dataset(image_dataset)
+        dataset.add_dataset_members(members, execution_rid=execution_rid)
+
+        return {k: len(v) for k, v in members.items()}
 
     def get_multimodal_tf_dataset(self, ds_bag: DatasetBag):
         modality_df = self.extract_modality(ds_bag)

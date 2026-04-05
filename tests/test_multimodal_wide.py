@@ -1,9 +1,16 @@
+import argparse
 import logging
 from eye_ai.eye_ai import EyeAI
 from deriva_ml.dataset.aux_classes import DatasetSpec
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--hostname", default="www.eye-ai.org", help="Catalog hostname")
+parser.add_argument("--dataset-rid", default="2-C9PR", help="Dataset RID")
+parser.add_argument("--dataset-version", default="2.10.0", help="Dataset version")
+args = parser.parse_args()
+
 ai = EyeAI(
-    hostname="www.eye-ai.org",
+    hostname=args.hostname,
     catalog_id="eye-ai",
     cache_dir="/tmp/eye_ai_cache",
     working_dir="/tmp/eye_ai_work",
@@ -11,10 +18,8 @@ ai = EyeAI(
     deriva_logging_level=logging.ERROR,
 )
 
-# Replace with a multimodal dataset RID and version that contains
-# Subject, Observation, Report_HVF, Report_RNFL, and Clinical_Records data.
-DATASET_RID = "2-C9PR"
-DATASET_VERSION = "2.10.0"
+DATASET_RID = args.dataset_rid
+DATASET_VERSION = args.dataset_version
 
 print(f"Downloading dataset {DATASET_RID}...")
 ds_bag = ai.download_dataset_bag(DatasetSpec(rid=DATASET_RID, version=DATASET_VERSION, materialize=False))
@@ -51,4 +56,18 @@ assert "Subject.RID" in result.columns, "Missing Subject.RID"
 assert "Image_Side" in result.columns, "Missing Image_Side"
 assert not any("_x" in c or "_y" in c for c in result.columns), \
     f"Duplicate columns found: {[c for c in result.columns if '_x' in c or '_y' in c]}"
+
+print("\nClinical Records coverage:")
+n_subjects = result['Subject.RID'].nunique()
+n_with_clinic = result['Clinical_Records.RID'].notna().sum()
+print(f"  Subjects: {n_subjects}")
+print(f"  Rows with Clinical Records: {n_with_clinic} / {result.shape[0]}")
+print(f"  Rows without Clinical Records: {result['Clinical_Records.RID'].isna().sum()}")
+
+print("\nHVF coverage:")
+print(f"  Rows with HVF: {result['Report_HVF.RID'].notna().sum()} / {result.shape[0]}")
+
+print("\nRNFL coverage:")
+print(f"  Rows with RNFL: {result['Report_RNFL.RID'].notna().sum()} / {result.shape[0]}")
+
 print("\nAll checks passed.")
