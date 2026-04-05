@@ -34,8 +34,12 @@ image_spec = DatasetSpec(
     version=args.image_dataset_version,
     materialize=False,
 )
-print(f"\nRunning multimodal_wide_from_subject_bag on {image_spec.rid} v{image_spec.version}...")
-result = ai.multimodal_wide_from_subject_bag(image_spec, subject_bag)
+print(f"\nDownloading image dataset {image_spec.rid} v{image_spec.version}...")
+image_bag = ai.download_dataset_bag(image_spec)
+print("Image dataset downloaded.")
+
+print(f"\nRunning multimodal_wide_from_subject_bag...")
+result = ai.multimodal_wide_from_subject_bag(image_bag, subject_bag)
 
 print(f"\nResult shape: {result.shape}")
 print(f"Columns ({len(result.columns)}):")

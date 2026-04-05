@@ -561,25 +561,26 @@ class EyeAI(DerivaML):
 
     def multimodal_wide_from_subject_bag(
         self,
-        image_dataset: DatasetSpec,
+        image_bag: DatasetBag,
         subject_bag: DatasetBag,
     ) -> pd.DataFrame:
-        """Compute the multimodal wide table directly from an image dataset and a subject
-        bag, without saving any records back to the catalog.
+        """Compute the multimodal wide table directly from an image bag and a subject bag,
+        without saving any records back to the catalog.
 
         Use this as a workaround when the enriched image dataset cannot be downloaded due
         to the deep FK traversal timeout bug in deriva_ml. Switch to multimodal_wide once
         the dataset has been enriched via add_multimodal_measurements and the bug is fixed.
 
+        Both bags should be downloaded within an execution context before calling this method.
+
         Args:
-            image_dataset: DatasetSpec for the image dataset (provides fundus anchor).
+            image_bag: DatasetBag for the image dataset (provides fundus anchor).
             subject_bag: DatasetBag from a subject dataset covering the same subjects.
 
         Returns:
             Wide DataFrame with one row per subject per side, joining fundus, HVF, RNFL,
             and Clinical Records.
         """
-        image_bag = self.download_dataset_bag(image_dataset)
         image_frame = image_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
         fundus = image_frame[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender',
                                'Subject.Subject_Ethnicity', 'Observation.RID',
