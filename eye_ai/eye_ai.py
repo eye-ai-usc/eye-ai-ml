@@ -559,6 +559,42 @@ class EyeAI(DerivaML):
                                    on=['Image_Side', 'Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity'])
         return multimodal_wide
 
+    def severity_analysis(self, ds_bag: DatasetBag):
+        wide = self.multimodal_wide(ds_bag)
+
+        def fill_severe_side(df, value_col, new_col, smaller=True):
+            df[new_col] = None  # object dtype to hold string labels
+            for _, group in df.groupby('Subject.RID'):
+                if len(group) != 2:
+                    continue
+                left = group[group['Image_Side'] == 'Left']
+                right = group[group['Image_Side'] == 'Right']
+                if left.empty or right.empty:
+                    continue
+                left_val = left[value_col].values[0]
+                right_val = right[value_col].values[0]
+                if pd.isna(left_val) or pd.isna(right_val):
+                    continue
+                if smaller:
+                    severe = 'Left' if left_val < right_val else ('Right' if right_val < left_val else 'Left/Right')
+                else:
+                    severe = 'Left' if left_val > right_val else ('Right' if right_val > left_val else 'Left/Right')
+                df.loc[group.index, new_col] = severe
+
+        fill_severe_side(wide, 'OCR_RNFL.Average_RNFL_Thickness(μm)', 'RNFL_severe', smaller=True)
+        fill_severe_side(wide, 'OCR_HVF.MD', 'HVF_severe', smaller=True)
+        fill_severe_side(wide, 'Clinical_Records.CDR', 'CDR_severe', smaller=False)
+
+        def check_severity(row):
+            severities = [row['RNFL_severe'], row['HVF_severe'], row['CDR_severe']]
+            try:
+                return not (all(["Left" in l for l in severities]) or all(["Right" in l for l in severities]))
+            except Exception:
+                return True
+
+        wide['Severity_Mismatch'] = wide.apply(check_severity, axis=1)
+        return wide
+
     def multimodal_wide_from_subject_bag(
         self,
         image_bag: DatasetBag,
