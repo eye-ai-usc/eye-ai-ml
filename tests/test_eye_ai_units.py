@@ -14,6 +14,33 @@ import pytest
 from eye_ai.eye_ai import EyeAI
 
 
+class _FakeBag:
+    """Minimal stand-in for a DatasetBag: serves table rows from a dict."""
+
+    def __init__(self, tables: dict[str, list[dict]], dataset_rid: str = "1-TEST"):
+        self._tables = tables
+        self.dataset_rid = dataset_rid
+
+    def get_table_as_dict(self, table: str):
+        return iter(self._tables.get(table, []))
+
+
+class TestFilterAngle2:
+    def test_keeps_only_image_angle_2(self):
+        bag = _FakeBag(
+            {
+                "Image": [
+                    {"RID": "I1", "Image_Angle": "2"},
+                    {"RID": "I2", "Image_Angle": "1"},
+                    {"RID": "I3", "Image_Angle": "2"},
+                ]
+            }
+        )
+        result = EyeAI.filter_angle_2(bag)
+        assert set(result["RID"]) == {"I1", "I3"}
+        assert (result["Image_Angle"] == "2").all()
+
+
 class TestFindLatestObservation:
     def test_keeps_only_latest_encounter_per_subject(self):
         df = pd.DataFrame(
@@ -168,3 +195,28 @@ class TestPlotRoc:
         out = pd.read_csv(roc_csv)
         assert "False Positive Rate" in out.columns
         assert "True Positive Rate" in out.columns
+
+
+class TestInsertConditionLabel:
+    """Unit-test the prep logic + that it inserts via _domain_path() (the
+    post-migration accessor), without touching a live catalog."""
+
+    def test_renames_and_inserts_via_domain_path(self):
+        from unittest.mock import MagicMock
+
+        condition_label = pd.DataFrame(
+            {"Clinical_Records": ["C1", "C2"], "Condition_Label": ["POAG", "GS"]}
+        )
+
+        ai = EyeAI.__new__(EyeAI)  # bypass __init__/connection
+        mock_path = MagicMock()
+        ai._domain_path = MagicMock(return_value=mock_path)
+
+        EyeAI.insert_condition_label(ai, condition_label)
+
+        # Used the migrated _domain_path() accessor (not the old property).
+        ai._domain_path.assert_called_once()
+        # Inserted records with 'Clinical_Records' renamed to 'RID'.
+        inserted = mock_path.Clinical_Records.insert.call_args[0][0]
+        assert all("RID" in row and "Clinical_Records" not in row for row in inserted)
+        assert {row["RID"] for row in inserted} == {"C1", "C2"}
