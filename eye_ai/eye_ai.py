@@ -1,15 +1,14 @@
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Callable, Optional
+from typing import List, Callable
 import matplotlib.pyplot as plt
 import pandas as pd
-from PIL import Image
 from sklearn.metrics import roc_curve
 
 import numpy as np
 import logging
 
 from deriva_ml import DerivaML, DerivaMLException
+from deriva_ml.core.connection_mode import ConnectionMode
 from deriva_ml.core.definitions import ML_SCHEMA
 from deriva_ml.dataset import DatasetBag
 from deriva_ml.dataset.aux_classes import DatasetSpec
@@ -21,36 +20,30 @@ class EyeAIException(DerivaMLException):
 
 
 class EyeAI(DerivaML):
-    """
-    EyeAI is a class that extends DerivaML and provides additional routines for working with eye-ai
-    catalogs using deriva-py.
+    """Domain subclass of :class:`deriva_ml.DerivaML` for EYE-AI catalogs.
 
-    Attributes:
-    - protocol (str): The protocol used to connect to the catalog (e.g., "https").
-    - hostname (str): The hostname of the server where the catalog is located.
-    - catalog_number (str): The catalog number or name.
-    - credential (object): The credential object used for authentication.
-    - catalog (ErmrestCatalog): The ErmrestCatalog object representing the catalog.
-    - pb (PathBuilder): The PathBuilder object for constructing URL paths.
+    EyeAI adds eye-ai-specific analytics over fundus images, HVF/RNFL reports,
+    and clinical records. It is a faithful pass-through over ``DerivaML``: the
+    constructor only supplies the eye-ai default ``hostname`` and ``catalog_id``.
+    Catalog connection, path building, and the five DerivaML abstractions
+    (Dataset, Workflow, Execution, Feature, Asset) are inherited unchanged.
 
-    Methods:
-    - __init__(self, hostname: str = 'www.eye-ai.org', catalog_number: str = 'eye-ai'): Initializes the EyeAI object.
-    - create_new_vocab(self, schema_name: str, table_name: str, name: str, description: str, synonyms: List[str] = [],
-            exist_ok: bool = False) -> str: Creates a new controlled vocabulary in the catalog.
-    - image_tall(self, dataset_rid: str, diagnosis_tag_rid: str): Retrieves tall-format image data based on provided
-      diagnosis tag filters.
-    - add_process(self, process_name: str, github_url: str = "", process_tag: str = "", description: str = "",
-                    github_checksum: str = "", exists_ok: bool = False) -> str: Adds a new process to the Process table.
-    - compute_diagnosis(self, df: pd.DataFrame, diag_func: Callable, cdr_func: Callable,
-                          image_quality_func: Callable) -> List[dict]: Computes new diagnosis based on
-                                                                       provided functions.
-    - insert_new_diagnosis(self, entities: List[dict[str, dict]], diagTag_RID: str, process_rid: str): Batch inserts new
-      diagnosis entities into the Diagnoisis table.
+    General data-prep (image cropping, RETFound directory layout, SVG
+    bounding-box parsing) has been moved out of this class into the
+    ``data-curation`` repository — it is not eye-ai domain logic. Wide-table
+    construction delegates to deriva-ml's denormalization routines
+    (``DatasetBag.get_denormalized_as_dataframe``).
 
-    Private Methods:
-    - _find_latest_observation(df: pd.DataFrame): Finds the latest observations for each subject in the DataFrame.
-    - _batch_insert(table: datapath._TableWrapper, entities: Sequence[dict[str, str]]): Batch inserts
-       entities into a table.
+    Method groups:
+    - Tall/wide image analytics: ``image_tall``, ``reshape_table``,
+      ``compute_diagnosis``, ``filter_angle_2``.
+    - Multimodal assembly: ``extract_modality``, ``multimodal_wide``,
+      ``severity_analysis``, ``multimodal_wide_from_subject_bag``,
+      ``add_multimodal_measurements``.
+    - Clinical labeling: ``compute_condition_label``, ``insert_condition_label``.
+    - Evaluation: ``plot_roc``.
+    - Domain matching helpers (static/private): ``_find_latest_observation``,
+      ``_select_24_2``, ``closest_to_fundus``.
     """
 
     def __init__(self, hostname: str = 'www.eye-ai.org',
@@ -67,8 +60,8 @@ class EyeAI(DerivaML):
                  credential: dict | None = None,
                  s3_bucket: str | None = None,
                  use_minid: bool | None = None,
-                 check_auth: bool = True,
-                 clean_execution_dir: bool = True):
+                 clean_execution_dir: bool = True,
+                 mode: ConnectionMode | str = ConnectionMode.online):
         """
         Initializes the EyeAI object.
 
@@ -92,8 +85,8 @@ class EyeAI(DerivaML):
             credential=credential,
             s3_bucket=s3_bucket,
             use_minid=use_minid,
-            check_auth=check_auth,
-            clean_execution_dir=clean_execution_dir
+            clean_execution_dir=clean_execution_dir,
+            mode=mode
         )
 
     @staticmethod
@@ -145,7 +138,7 @@ class EyeAI(DerivaML):
 
         image_frame = image_frame[image_frame['Diagnosis_Tag'] == diagnosis_tag]
 
-        # image_frame = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Image", "Image_Diagnosis"])
+        # image_frame = ds_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Image", "Image_Diagnosis"])
         # image_frame = ds_bag[(ds_bag['Image.Image_Angle'] == '2') & (ds_bag['Image_Diagnosis.Diagnosis_Tag'] == diagnosis_tag)]
         # Select only the first observation which included in the grading app.
     
@@ -203,7 +196,10 @@ class EyeAI(DerivaML):
           The Cup_Disk_Ratio is always round to 4 decimal places.
         """
     
-        df["Cup_Disk_Ratio"].replace("", np.nan, inplace=True) 
+        # Empty strings -> NaN. Assign back rather than chained inplace, which is a
+        # silent no-op under pandas Copy-on-Write (pandas >= 3.0). pd.to_numeric with
+        # errors="coerce" would handle "" too, but keep the explicit replace for clarity.
+        df["Cup_Disk_Ratio"] = df["Cup_Disk_Ratio"].replace("", np.nan)
         df["Cup_Disk_Ratio"] = pd.to_numeric(df["Cup_Disk_Ratio"], errors="coerce")
         result = df.groupby("Image_RID").agg({"Cup_Disk_Ratio": cdr_func,
                                               "Diagnosis_Image": diag_func,
@@ -229,162 +225,6 @@ class EyeAI(DerivaML):
         full_set = pd.DataFrame(list(ds_bag.get_table_as_dict('Image')))
         dataset_field_2 = full_set[full_set['Image_Angle'] == "2"]
         return dataset_field_2
-
-    @staticmethod
-    def get_bounding_box(svg_path: Path) -> tuple:
-        """
-        Retrieves the bounding box coordinates from an SVG file.
-
-        Parameters:
-        - svg_path (str): Path to the SVG file.
-
-        Returns:
-        - tuple: A tuple containing the bounding box coordinates (x_min, y_min, x_max, y_max).
-        """
-        tree = ET.parse(svg_path)
-        root = tree.getroot()
-        rect = root.find(".//{http://www.w3.org/2000/svg}rect")
-        x_min = int(rect.attrib['x'])
-        y_min = int(rect.attrib['y'])
-        width = int(rect.attrib['width'])
-        height = int(rect.attrib['height'])
-        bbox = (x_min, y_min, x_min + width, y_min + height)
-        return bbox
-
-    def create_cropped_images(self,  ds_bag: DatasetBag, output_dir: Path, crop_to_eye: bool,
-                              exclude_list: Optional[list] = None, include_only_list: Optional[list] = None) -> tuple:
-        """
-        Retrieves images and saves them to the specified directory and separated into two folders by class. Optionally choose to crop the images or not.
-
-        Parameters:
-        - ds_bag (DatasetBag): DatasetBag object of the dataset.
-        - output_dir(Path): Directory location to save the images.
-        - crop_to_eye (bool): Flag indicating whether to crop images to the eye.
-        - exclude_list(list): A list of RID to be excluded.
-        - include_only_list(list): A list of RID to be included only. Only taking the RID in this list from ds_bag. RIDs in exclude list would still be excluded
-
-        Returns:
-        - tuple: A tuple containing the path to the directory containing images and the path to the output CSV file.
-        """
-
-        if not exclude_list:
-            exclude_list = []
-
-        if not include_only_list:
-            include_only_list = []
-
-        out_path_no_glaucoma = output_dir / 'No_Glaucoma'
-        out_path_no_glaucoma.mkdir(parents=True, exist_ok=True)
-        out_path_glaucoma = output_dir / 'Suspected_Glaucoma'
-        out_path_glaucoma.mkdir(parents=True, exist_ok=True)
-        
-        image_annot_df = pd.DataFrame(list(ds_bag.get_table_as_dict('Annotation')))
-        image_df = pd.DataFrame(list(ds_bag.get_table_as_dict('Image')))
-        diagnosis = pd.DataFrame(list(ds_bag.get_table_as_dict('Image_Diagnosis')))
-        image_bounding_box_df = pd.DataFrame(list(ds_bag.get_table_as_dict('Fundus_Bounding_Box')))
-
-        for index, row in image_annot_df.iterrows():
-            image_rid = row['Image']
-            if include_only_list and image_rid not in include_only_list:
-                continue
-                    
-            if image_rid in exclude_list:
-                continue
-                
-            image_file_path = image_df[image_df['RID'] == image_rid]['Filename'].values[0]
-            image_file_name = Path(image_file_path).name
-            
-            if ds_bag.dataset_rid not in image_file_path:
-                print("Error: Image does not belongs to the dataset")
-                continue
-                
-            image = Image.open(str(image_file_path))
-            diag = diagnosis[(diagnosis['Diagnosis_Tag'] == 'Initial Diagnosis')
-                                     & (diagnosis['Image'] == image_rid)]['Diagnosis_Image'].iloc[0]
-            
-            out_path_dir = str(out_path_no_glaucoma) if diag == 'No Glaucoma' else str(out_path_glaucoma)
-            
-            annotation_bounding_box =  pd.merge(image_annot_df[['Image', 'Fundus_Bounding_Box']], 
-                                                image_bounding_box_df, 
-                                                left_on='Fundus_Bounding_Box', 
-                                                right_on='RID')
-         
-            svg_path = annotation_bounding_box.loc[annotation_bounding_box['Image'] == image_rid, 'Filename'].values[0]
-
-                
-            svg_path = Path(svg_path)
-            if not svg_path.exists():
-                continue
-                
-            if crop_to_eye:
-                bbox = self.get_bounding_box(svg_path)
-                cropped_image = image.crop(bbox)
-                cropped_image.save(f'{out_path_dir}/Cropped_{image_rid}.JPG')
-                image_annot_df.loc[index, 'Cropped Filename'] = 'Cropped_' + image_file_name
-            else:
-                image.save(f'{str(out_path_dir)}/{image_rid}.JPG')
-                image_annot_df.loc[index, 'Filename'] =  image_file_name
-                
-        image_csv = 'Cropped_Image.csv' if crop_to_eye else 'Image.csv'
-        output_csv = output_dir / image_csv
-        image_annot_df.to_csv(output_csv)
-        
-        return output_dir, output_csv
-
-    def create_retfound_image_directory(self,ds_bag_train_dict: dict, 
-                                             ds_bag_val_dict: dict, 
-                                             ds_bag_test_dict: dict, 
-                                             output_dir: Path, 
-                                             crop_to_eye: bool = False) -> tuple:
-        """
-        Wrapper for create_cropped_images to create correct RETFound directory format.
-
-        Parameters:
-        - ds_bag_train_dict (dict): A dictionary contains training DatasetBag.
-        - ds_bag_val_dict (dict): A dictionary contains validating DatasetBag.
-        - ds_bag_test_dict (dict): A dictionary contains testing DatasetBag.
-        - output_dir(Path): Directory location to save the images.
-        - crop_to_eye (bool): Flag indicating whether to crop images to the eye.
-  
-        Returns:
-        - tuple: A tuple containing the path to the directory containing images and the path to the output CSV file.
-        """
-     
-        if ds_bag_train_dict is None or ds_bag_val_dict is None or ds_bag_test_dict is None:
-            print("Error: RETFound required all three train, val, test to be presented")
-            return
-        
-        ds_bag_train = ds_bag_train_dict["ds_bag"]
-        ds_bag_val = ds_bag_val_dict["ds_bag"]
-        ds_bag_test = ds_bag_test_dict["ds_bag"]
-
-        concat_name = f"{ds_bag_train.dataset_rid}_{ds_bag_val.dataset_rid}_{ds_bag_test.dataset_rid}"
-        dir_name = f"{concat_name}_RETFound_Cropped" if crop_to_eye else f"{concat_name}_RETFound"
-
-        output_dir = output_dir / dir_name
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        train_dir , train_csv = self.create_cropped_images(ds_bag = ds_bag_train, 
-                                            output_dir =  output_dir / "train", 
-                                            crop_to_eye =  crop_to_eye,
-                                            exclude_list = ds_bag_train_dict.get("exclude_list", []), 
-                                            include_only_list= ds_bag_train_dict.get("include_list", [])) 
-        
-        val_dir , val_csv = self.create_cropped_images(ds_bag = ds_bag_val, 
-                                            output_dir =  output_dir / "val", 
-                                            crop_to_eye =  crop_to_eye,
-                                            exclude_list = ds_bag_val_dict.get("exclude_list", []), 
-                                            include_only_list= ds_bag_val_dict.get("include_list", [])) 
-        
-        test_dir , test_csv = self.create_cropped_images(ds_bag = ds_bag_test, 
-                                            output_dir =  output_dir / "test", 
-                                            crop_to_eye =  crop_to_eye,
-                                            exclude_list = ds_bag_test_dict.get("exclude_list", []), 
-                                            include_only_list= ds_bag_test_dict.get("include_list", [])) 
-
-
-        return output_dir, train_dir, train_csv, val_dir, val_csv, test_dir, test_csv
-
 
     def plot_roc(self, execution: Execution, data: pd.DataFrame) -> Path:
         """
@@ -451,7 +291,7 @@ class EyeAI(DerivaML):
     def insert_condition_label(self, condition_label: pd.DataFrame):
         condition_label.rename(columns={'Clinical_Records': 'RID'}, inplace=True)
         entities = condition_label.to_dict(orient='records')
-        self.domain_path.Clinical_Records.insert(entities)
+        self._domain_path().Clinical_Records.insert(entities)
 
     @staticmethod
     def _select_24_2(hvf: pd.DataFrame) -> pd.DataFrame:
@@ -495,17 +335,17 @@ class EyeAI(DerivaML):
 
     def extract_modality(self, ds_bag: DatasetBag) -> dict[str, pd.DataFrame]:
         # Image
-        image = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
+        image = ds_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Image"])
         fundus = image[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity',
                         'Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter']].drop_duplicates()
 
         # Report_HVF
-        hvf_frame = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+        hvf_frame = ds_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
         hvf = self._select_24_2(hvf_frame)
         hvf_match = self.closest_to_fundus(hvf, fundus, side_col='OCR_HVF.Image_Side')
 
         # Report_RNFL
-        rnfl = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
+        rnfl = ds_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
         def highest_signal_strength(rnfl):
             rnfl_clean = rnfl.dropna(subset=['OCR_RNFL.RID', 'OCR_RNFL.Signal_Strength'])
             idx = rnfl_clean.groupby(['Observation.RID', 'OCR_RNFL.Image_Side'])['OCR_RNFL.Signal_Strength'].idxmax()
@@ -515,7 +355,7 @@ class EyeAI(DerivaML):
         rnfl_match = self.closest_to_fundus(rnfl, fundus, side_col='OCR_RNFL.Image_Side')
 
         # select clinic records by the date of encounter (on the fundus date of encounter)
-        clinic = ds_bag.denormalize_as_dataframe(include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records'])
+        clinic = ds_bag.get_denormalized_as_dataframe(include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records'])
         clinic_match = fundus.merge(clinic, on=['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity',
                                                 'Observation.RID', 'Observation.Observation_ID', 'Observation.Date_of_Encounter'], how='left')
         clinic_match = clinic_match[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender', 'Subject.Subject_Ethnicity',
@@ -617,23 +457,23 @@ class EyeAI(DerivaML):
             Wide DataFrame with one row per subject per side, joining fundus, HVF, RNFL,
             and Clinical Records.
         """
-        image_frame = image_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
+        image_frame = image_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Image"])
         fundus = image_frame[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender',
                                'Subject.Subject_Ethnicity', 'Observation.RID',
                                'Observation.Observation_ID', 'Observation.Date_of_Encounter']].drop_duplicates()
 
-        hvf_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+        hvf_frame = subject_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
         hvf = self._select_24_2(hvf_frame)
         hvf_matched = self.closest_to_fundus(hvf, fundus, side_col='OCR_HVF.Image_Side')
 
-        rnfl_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
+        rnfl_frame = subject_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
         def highest_signal_strength(rnfl):
             rnfl_clean = rnfl.dropna(subset=['OCR_RNFL.RID', 'OCR_RNFL.Signal_Strength'])
             idx = rnfl_clean.groupby(['Observation.RID', 'OCR_RNFL.Image_Side'])['OCR_RNFL.Signal_Strength'].idxmax()
             return rnfl_clean.loc[idx]
         rnfl_matched = self.closest_to_fundus(highest_signal_strength(rnfl_frame), fundus, side_col='OCR_RNFL.Image_Side')
 
-        clinic_frame = subject_bag.denormalize_as_dataframe(
+        clinic_frame = subject_bag.get_denormalized_as_dataframe(
             include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records']
         )
         clinic_matched = self.closest_to_fundus(clinic_frame, fundus, side_col='Clinical_Records.Powerform_Laterality')
@@ -692,18 +532,18 @@ class EyeAI(DerivaML):
         """
         # Get fundus frame from image dataset bag
         image_bag = self.download_dataset_bag(image_dataset)
-        image_frame = image_bag.denormalize_as_dataframe(["Subject", "Observation", "Image"])
+        image_frame = image_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Image"])
         fundus = image_frame[['Subject.RID', 'Subject.Subject_ID', 'Subject.Subject_Gender',
                                'Subject.Subject_Ethnicity', 'Observation.RID',
                                'Observation.Observation_ID', 'Observation.Date_of_Encounter']].drop_duplicates()
 
         # Match HVF from subject bag
-        hvf_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+        hvf_frame = subject_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
         hvf = self._select_24_2(hvf_frame)
         hvf_matched = self.closest_to_fundus(hvf, fundus, side_col='OCR_HVF.Image_Side')
 
         # Match RNFL from subject bag
-        rnfl_frame = subject_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
+        rnfl_frame = subject_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_RNFL", "OCR_RNFL"])
         def highest_signal_strength(rnfl):
             rnfl_clean = rnfl.dropna(subset=['OCR_RNFL.RID', 'OCR_RNFL.Signal_Strength'])
             idx = rnfl_clean.groupby(['Observation.RID', 'OCR_RNFL.Image_Side'])['OCR_RNFL.Signal_Strength'].idxmax()
@@ -712,7 +552,7 @@ class EyeAI(DerivaML):
 
         # Match Clinical Records from subject bag: exact observation match first,
         # falling back to closest date per subject per side
-        clinic_frame = subject_bag.denormalize_as_dataframe(
+        clinic_frame = subject_bag.get_denormalized_as_dataframe(
             include_tables=['Subject', 'Observation', 'Clinical_Records_Observation', 'Clinical_Records']
         )
         clinic_matched = self.closest_to_fundus(clinic_frame, fundus, side_col='Clinical_Records.Powerform_Laterality')
@@ -742,6 +582,3 @@ class EyeAI(DerivaML):
         dataset.add_dataset_members(members, execution_rid=execution_rid)
 
         return {k: len(v) for k, v in members.items()}
-
-    def get_multimodal_tf_dataset(self, ds_bag: DatasetBag):
-        modality_df = self.extract_modality(ds_bag)
