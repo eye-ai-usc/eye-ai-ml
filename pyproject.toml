@@ -36,10 +36,9 @@ jupyter = ["ipykernel", "jupyter"]
 python-preference = "only-managed"
 
 [tool.uv.sources]
-# Pinned to the restore-user-list branch, which re-adds DerivaML.user_list()
-# (used by EyeAI.image_tall). Move back to the default branch / a tag once that
-# change merges upstream.
-deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml", branch = "restore-user-list" }
+# deriva-ml from its default branch (main). main includes DerivaML.user_list()
+# as of PR #282 (restored; used by EyeAI.image_tall).
+deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml" }
 
 
 [tool.setuptools.package-data]
