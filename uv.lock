@@ -792,8 +792,8 @@ dependencies = [
 
 [[package]]
 name = "deriva-ml"
-version = "1.43.2.post2+g54a157fae"
-source = { git = "https://github.com/informatics-isi-edu/deriva-ml?tag=v1.44.0#54a157fae3ba90d259fc7750df76d0cb2dc7e17b" }
+version = "1.45.0"
+source = { git = "https://github.com/informatics-isi-edu/deriva-ml?tag=v1.45.0#5158d8f93043011f23b7ac2c0275479aadeb2a14" }
 dependencies = [
     { name = "bdbag" },
     { name = "bump-my-version" },
@@ -865,7 +865,7 @@ lint = [
 
 [package.metadata]
 requires-dist = [
-    { name = "deriva-ml", git = "https://github.com/informatics-isi-edu/deriva-ml?tag=v1.44.0" },
+    { name = "deriva-ml", git = "https://github.com/informatics-isi-edu/deriva-ml?tag=v1.45.0" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "matplotlib" },
     { name = "pandas" },

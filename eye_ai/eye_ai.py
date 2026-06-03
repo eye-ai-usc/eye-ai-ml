@@ -125,26 +125,37 @@ class EyeAI(DerivaML):
           based on the provided filters.
         """
 
-        sys_cols = ['RCT', 'RMT', 'RCB', 'RMB']
-        subject = pd.DataFrame(list(ds_bag.get_table_as_dict('Subject'))).rename(columns={'RID': 'Subject_RID'}).drop(columns=sys_cols)
-        observation = pd.DataFrame(list(ds_bag.get_table_as_dict('Observation'))).rename(columns={'RID': 'Observation_RID'}).drop(columns=sys_cols)
-        image = pd.DataFrame(list(ds_bag.get_table_as_dict('Image'))).rename(columns={'RID': 'Image_RID'}).drop(columns=sys_cols)
-        diagnosis = pd.DataFrame(list(ds_bag.get_table_as_dict('Image_Diagnosis'))).rename(columns={'RID': 'Diagnosis_RID'}).drop(columns=['RCT', 'RMT', 'RMB'])
-        
-        merge_obs = pd.merge(subject, observation, left_on='Subject_RID', right_on='Subject', how='left')
-        merge_image = pd.merge(merge_obs, image, left_on='Observation_RID', right_on='Observation', how='left')
-        merge_diag = pd.merge(merge_image, diagnosis, left_on='Image_RID', right_on='Image', how='left')
-        image_frame = merge_diag[merge_diag['Image_Angle'] == '2']
+        # Denormalize via deriva-ml (replaces the former manual Subject->Observation
+        # ->Image->Image_Diagnosis pd.merge chain). system_columns=["RCB"] retains
+        # the diagnosis row's creating-user id, needed for the grader -> user_list
+        # merge on grading tags (RCB is dropped by the denormalizer otherwise).
+        frame = ds_bag.get_denormalized_as_dataframe(
+            ["Subject", "Observation", "Image", "Image_Diagnosis"],
+            system_columns=["RCB"],
+        )
 
+        # Map the Table.column denormalized labels back to the flat names the
+        # rest of this method (and _find_latest_observation) expects.
+        image_frame = frame.rename(columns={
+            "Subject.RID": "Subject_RID",
+            "Image.RID": "Image_RID",
+            "Image_Diagnosis.RID": "Diagnosis_RID",
+            "Image.Image_Angle": "Image_Angle",
+            "Image.Image_Side": "Image_Side",
+            "Image_Diagnosis.Diagnosis_Tag": "Diagnosis_Tag",
+            "Image_Diagnosis.Diagnosis_Image": "Diagnosis_Image",
+            "Image_Diagnosis.Cup_Disk_Ratio": "Cup_Disk_Ratio",
+            "Image_Diagnosis.Image_Quality": "Image_Quality",
+            "Image_Diagnosis.RCB": "RCB",
+            "Observation.Date_of_Encounter": "date_of_encounter",
+        })
+
+        image_frame = image_frame[image_frame['Image_Angle'] == '2']
         image_frame = image_frame[image_frame['Diagnosis_Tag'] == diagnosis_tag]
 
-        # image_frame = ds_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Image", "Image_Diagnosis"])
-        # image_frame = ds_bag[(ds_bag['Image.Image_Angle'] == '2') & (ds_bag['Image_Diagnosis.Diagnosis_Tag'] == diagnosis_tag)]
-        # Select only the first observation which included in the grading app.
-    
-     
+        # Select only the first observation which is included in the grading app.
         image_frame = self._find_latest_observation(image_frame)
-   
+
         grading_tags = ["GlaucomaSuspect", "AI_glaucomasuspect_test",
                         "GlaucomaSuspect-Training", "GlaucomaSuspect-Validation"]
         if diagnosis_tag in grading_tags:

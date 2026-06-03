@@ -36,9 +36,10 @@ jupyter = ["ipykernel", "jupyter"]
 python-preference = "only-managed"
 
 [tool.uv.sources]
-# deriva-ml pinned to v1.44.0, which restored DerivaML.user_list() (PR #282;
-# used by EyeAI.image_tall).
-deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml", tag = "v1.44.0" }
+# deriva-ml pinned to v1.45.0: restored DerivaML.user_list() (PR #282) and the
+# get_denormalized_as_dataframe(system_columns=...) opt-in (PR #283), both used
+# by EyeAI.image_tall.
+deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml", tag = "v1.45.0" }
 
 
 [tool.setuptools.package-data]
