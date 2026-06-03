@@ -1,95 +1,77 @@
-# Tests for the datapath module.
-#
-# Environment variables:
-#  DERIVA_PY_TEST_HOSTNAME: hostname of the test server
-#  DERIVA_PY_TEST_CREDENTIAL: user credential, if none, it will attempt to get credentail for given hostname
-#  DERIVA_PY_TEST_VERBOSE: set for verbose logging output to stdout
-import logging
+"""Read-only integration test for EyeAI against a live catalog.
+
+Exercises ``EyeAI.image_tall`` end-to-end against the ``eye-ai`` catalog on
+``dev.eye-ai.org`` (which already carries the full eye-ai schema and data, so
+no ephemeral test-catalog harness is needed). ``image_tall`` is chosen because
+it exercises the restored ``DerivaML.user_list()`` path (mapping a grader's
+RCB user id to Full_Name) in addition to bag denormalization.
+
+This test downloads a dataset bag and reads from it; it makes no catalog
+mutations. It skips cleanly when no test host / credentials are configured, so
+it is safe in environments without dev access.
+
+Environment variables:
+  EYE_AI_TEST_HOSTNAME   catalog host (default: dev.eye-ai.org)
+  EYE_AI_TEST_CATALOG    catalog id   (default: eye-ai)
+  EYE_AI_TEST_DATASET    dataset RID to read
+  EYE_AI_TEST_VERSION    dataset version
+  EYE_AI_TEST_DIAG_TAG   diagnosis tag to filter on (default: Initial Diagnosis)
+
+Run against dev explicitly, e.g.:
+  EYE_AI_TEST_DATASET=2-C9PR EYE_AI_TEST_VERSION=2.10.0 \
+    uv run pytest tests/test_eye_ai.py -v
+"""
+
 import os
-import sys
-import unittest
 
-import pandas as pd
-from deriva.core import DerivaServer, ErmrestCatalog, get_credential
-from typing import Optional
+import pytest
 
-from deriva_ml.deriva_ml_base import DerivaML, DerivaMLException, RID, ColumnDefinition, BuiltinTypes
-from deriva_ml.schema_setup.create_schema import create_ml_schema
-from eye_ai.schema_setup.test_catalog import create_domain_schema, populate_test_catalog
-from eye_ai.eye_ai import EyeAI
-from deriva_ml.execution_configuration import ExecutionConfiguration
+from deriva_ml.dataset.aux_classes import DatasetSpec
 
-try:
-    from pandas import DataFrame
+DATASET_RID = os.getenv("EYE_AI_TEST_DATASET")
+DATASET_VERSION = os.getenv("EYE_AI_TEST_VERSION")
+DIAG_TAG = os.getenv("EYE_AI_TEST_DIAG_TAG", "Initial Diagnosis")
 
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
+IMAGE_TALL_COLUMNS = {
+    "Subject_RID",
+    "Image_RID",
+    "Diagnosis_RID",
+    "Full_Name",
+    "Image_Side",
+    "Diagnosis_Image",
+    "Cup_Disk_Ratio",
+    "Image_Quality",
+}
 
-SNAME_DOMAIN = 'eye-ai'
-
-hostname = os.getenv("DERIVA_PY_TEST_HOSTNAME")
-logger = logging.getLogger(__name__)
-if os.getenv("DERIVA_PY_TEST_VERBOSE"):
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(logging.StreamHandler())
+# A dataset RID/version must be supplied to run the live image_tall test.
+needs_dataset = pytest.mark.skipif(
+    not (DATASET_RID and DATASET_VERSION),
+    reason="Set EYE_AI_TEST_DATASET and EYE_AI_TEST_VERSION to run the live image_tall test.",
+)
 
 
-test_catalog: Optional[ErmrestCatalog] = None
+class TestUserList:
+    """user_list() is the restored deriva-ml accessor image_tall depends on."""
+
+    def test_user_list_returns_id_and_full_name(self, eye_ai):
+        users = eye_ai.user_list()
+        assert isinstance(users, list)
+        assert len(users) >= 1
+        for user in users:
+            assert "ID" in user and "Full_Name" in user
 
 
-def setUpModule():
-    global test_catalog
-    logger.debug("setUpModule begin")
-    credential = os.getenv("DERIVA_PY_TEST_CREDENTIAL") or get_credential(hostname)
-    server = DerivaServer('https', hostname, credentials=credential)
-    test_catalog = server.create_ermrest_catalog()
-    model = test_catalog.getCatalogModel()
-    try:
-        create_ml_schema(model)
-        create_domain_schema(model, SNAME_DOMAIN)
-        populate_test_catalog(model, SNAME_DOMAIN)
-    except Exception:
-        # on failure, delete catalog and re-raise exception
-        test_catalog.delete_ermrest_catalog(really=True)
-        raise
-    logger.debug("setUpModule  done")
+@needs_dataset
+class TestImageTall:
+    def test_image_tall_shape_and_columns(self, eye_ai):
+        ds_bag = eye_ai.download_dataset_bag(
+            DatasetSpec(rid=DATASET_RID, version=DATASET_VERSION, materialize=False)
+        )
+        result = eye_ai.image_tall(ds_bag, DIAG_TAG)
 
-
-def tearDownModule():
-    logger.debug("tearDownModule begin")
-    test_catalog.delete_ermrest_catalog(really=True)
-    logger.debug("tearDownModule done")
-
-
-@unittest.skipUnless(hostname, "Test host not specified")
-class TestEyeAI(unittest.TestCase):
-
-    def setUp(self):
-        self.ml_instance = EyeAI(hostname, test_catalog.catalog_id, SNAME_DOMAIN, None, None, "1")
-        self.domain_schema = self.ml_instance.model.schemas[SNAME_DOMAIN]
-        self.model = self.ml_instance.model
-
-    def tearDown(self):
-        pass
-
-    def test_insert_new_diagnosis(self):
-        def insert_new_diagnosis(self, pred_df: pd.DataFrame,
-                                 diagtag_rid: str,
-                                 execution_rid: str):
-        populate_test_catalog(self.model, SNAME_DOMAIN)
-        pred_df = pd.DataFrame()
-        diagtag_rid = self.ml_instance.lookup_term("Diagnosis_Tag")
-        execution_rid = self.ml_instance.lookup_term("Execution_RID")
-        self.ml_instance.insert_new_diagnosis(pred_df, diagtag_rid, execution_rid)
-        self.assertIn("Dataset_Type", [v.name for v in self.ml_instance.find_vocabularies()])
-
-    def test_create_vocabulary(self):
-        populate_test_catalog(self.model, SNAME_DOMAIN)
-        self.ml_instance.create_vocabulary("CV1", "A vocab")
-
-
-
-
-if __name__ == '__main__':
-    sys.exit(unittest.main())
+        # Contract: the documented column set, with at least one row.
+        assert set(result.columns) == IMAGE_TALL_COLUMNS
+        assert len(result) > 0
+        # Every row carries a Full_Name (resolved via user_list for grading tags,
+        # or assigned the diagnosis_tag otherwise).
+        assert result["Full_Name"].notna().all()

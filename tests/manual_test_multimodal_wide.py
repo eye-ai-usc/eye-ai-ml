@@ -31,7 +31,7 @@ for t in ['Subject', 'Observation', 'Report_HVF', 'OCR_HVF', 'Report_RNFL', 'OCR
     print(f"  {t}: {len(rows)} rows")
 
 print("\nDebug: HVF denormalized frame:")
-hvf_frame = ds_bag.denormalize_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
+hvf_frame = ds_bag.get_denormalized_as_dataframe(["Subject", "Observation", "Report_HVF", "OCR_HVF"])
 print(f"  shape: {hvf_frame.shape}")
 print(f"  Observation cols: {[c for c in hvf_frame.columns if c.startswith('Observation.')]}")
 

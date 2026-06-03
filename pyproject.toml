@@ -8,7 +8,9 @@ dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "deriva",
+    # deriva (deriva-py) is intentionally NOT listed here: it is pulled in
+    # transitively by deriva-ml, which pins it from git. eye_ai imports only
+    # deriva_ml, never deriva directly. Let deriva-ml drive the deriva pin.
     "deriva-ml",
     "pandas",
     "pillow",
@@ -32,16 +34,11 @@ jupyter = ["ipykernel", "jupyter"]
 
 [tool.uv]
 python-preference = "only-managed"
-index-strategy = "unsafe-any-match"
 
 [tool.uv.sources]
-deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml"}
-
-[[tool.uv.index]]
-name = "github"
-url = "https://pypi.pkg.github.com/eye-ai-usc/" # typically ghcr.io
-publish-url = "https://pypi.pkg.github.com/eye-ai-usc/"
-explicit = true
+# deriva-ml pinned to v1.44.0, which restored DerivaML.user_list() (PR #282;
+# used by EyeAI.image_tall).
+deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml", tag = "v1.44.0" }
 
 
 [tool.setuptools.package-data]
@@ -52,6 +49,12 @@ requires = ["setuptools>=80", "setuptools_scm[toml]>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Manual integration runners (argparse scripts, run by hand against a live
+# catalog) are named manual_*.py and are not collected as pytest tests.
+python_files = ["test_*.py"]
 
 [tool.bumpversion]
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
