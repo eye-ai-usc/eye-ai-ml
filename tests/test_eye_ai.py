@@ -38,7 +38,7 @@ IMAGE_TALL_COLUMNS = {
     "Diagnosis_RID",
     "Full_Name",
     "Image_Side",
-    "Diagnosis_Image",
+    "Glaucoma_Diagnosis",
     "Cup_Disk_Ratio",
     "Image_Quality",
 }

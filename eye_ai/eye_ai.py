@@ -143,7 +143,7 @@ class EyeAI(DerivaML):
             "Image.Image_Angle": "Image_Angle",
             "Image.Image_Side": "Image_Side",
             "Image_Diagnosis.Diagnosis_Tag": "Diagnosis_Tag",
-            "Image_Diagnosis.Diagnosis_Image": "Diagnosis_Image",
+            "Image_Diagnosis.Glaucoma_Diagnosis": "Glaucoma_Diagnosis",
             "Image_Diagnosis.Cup_Disk_Ratio": "Cup_Disk_Ratio",
             "Image_Diagnosis.Image_Quality": "Image_Quality",
             "Image_Diagnosis.RCB": "RCB",
@@ -165,7 +165,7 @@ class EyeAI(DerivaML):
 
         return image_frame[
             ['Subject_RID', 'Image_RID', 'Diagnosis_RID', 'Full_Name', 'Image_Side',
-             'Diagnosis_Image', 'Cup_Disk_Ratio', 'Image_Quality']]
+             'Glaucoma_Diagnosis', 'Cup_Disk_Ratio', 'Image_Quality']]
 
     @staticmethod
     def reshape_table(frames: List[pd.DataFrame], compare_value: str):
@@ -181,7 +181,7 @@ class EyeAI(DerivaML):
         """
         long = pd.concat(frames).reset_index()
         # change data type for control vocab table
-        cols = ['Image_Quality', 'Image_Side', 'Full_Name', 'Diagnosis_Image']
+        cols = ['Image_Quality', 'Image_Side', 'Full_Name', 'Glaucoma_Diagnosis']
         for c in cols:
             long[c] = long[c].astype('category')
         wide = pd.pivot(long, index=['Image_RID', 'Image_Side', 'Subject_RID'], columns='Full_Name',
@@ -213,7 +213,7 @@ class EyeAI(DerivaML):
         df["Cup_Disk_Ratio"] = df["Cup_Disk_Ratio"].replace("", np.nan)
         df["Cup_Disk_Ratio"] = pd.to_numeric(df["Cup_Disk_Ratio"], errors="coerce")
         result = df.groupby("Image_RID").agg({"Cup_Disk_Ratio": cdr_func,
-                                              "Diagnosis_Image": diag_func,
+                                              "Glaucoma_Diagnosis": diag_func,
                                               "Image_Quality": image_quality_func})
         result = result.round({'Cup_Disk_Ratio': 4})
         result = result.fillna('NaN')

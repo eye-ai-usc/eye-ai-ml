@@ -67,7 +67,7 @@ class TestComputeDiagnosis:
             {
                 "Image_RID": ["I1", "I1", "I2"],
                 "Cup_Disk_Ratio": ["0.51234", "0.61234", "0.7"],
-                "Diagnosis_Image": ["No Glaucoma", "Suspected Glaucoma", "No Glaucoma"],
+                "Glaucoma_Diagnosis": ["No Glaucoma", "Suspected Glaucoma", "No Glaucoma"],
                 "Image_Quality": ["Good", "Good", "Bad"],
             }
         )
@@ -94,7 +94,7 @@ class TestReshapeTable:
                 "Subject_RID": ["S1", "S1"],
                 "Full_Name": ["GraderA", "GraderB"],
                 "Image_Quality": ["Good", "Good"],
-                "Diagnosis_Image": ["No Glaucoma", "Suspected Glaucoma"],
+                "Glaucoma_Diagnosis": ["No Glaucoma", "Suspected Glaucoma"],
                 "Cup_Disk_Ratio": [0.4, 0.6],
             }
         )
