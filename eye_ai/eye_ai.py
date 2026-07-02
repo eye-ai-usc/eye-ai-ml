@@ -266,37 +266,42 @@ class EyeAI(DerivaML):
         return roc_csv_path
 
     def compute_condition_label(self, icd10_asso: pd.DataFrame) -> pd.DataFrame:
-        icd_mapping = {
-            'H40.00*': 'GS',
-            'H40.01*': 'GS',
-            'H40.02*': 'GS',
-            'H40.03*': 'GS',
-            'H40.04*': 'GS',
-            'H40.05*': 'GS',
-            'H40.06*': 'GS',
-            'H40.10*': 'POAG',
-            'H40.11*': 'POAG',
-            'H40.12*': 'POAG',
-            'H40.13*': 'POAG',
-            'H40.14*': 'POAG',
-            'H40.15*': 'POAG',
-            'H40.2*': 'PACG'
-        }
+        """Reduce per-code ICD-10 associations to one condition label per record.
 
-        def map_icd_to_category(icd_code):
-            for key, value in icd_mapping.items():
-                if icd_code.startswith(key[:-1]):
-                    return value
-            return 'Other'
+        Joins each record's ICD-10 codes to the folded ``Glaucoma_Diagnosis`` term
+        via the catalog ``ICD10_Condition_Map`` cross-walk (replacing the former
+        hard-coded ``icd_mapping`` wildcard dict), then keeps the highest-priority
+        condition per ``Clinical_Records``. The multi-code priority tie-break is
+        retained; codes with no cross-walk entry fall to ``Other``.
 
-        # Apply the mapping
-        icd10_asso['Condition_Label'] = icd10_asso['ICD10_Eye'].apply(map_icd_to_category)
-        # Select severity
-        priority = {'PACG': 1, 'POAG': 2, 'GS': 3, 'Other': 4}
+        Args:
+            icd10_asso: One row per (Clinical_Records, ICD10_Eye) code, with a
+                ``RID`` column (as fetched from the association table).
+
+        Returns:
+            One row per ``Clinical_Records`` with a ``Condition_Label`` column
+            (the winning folded diagnosis term), ``RID``/``ICD10_Eye``/``Priority``
+            dropped — unchanged output contract from the dict-based version.
+        """
+        # Cross-walk: exact code -> folded diagnosis term (catalog is source of truth).
+        cmap = pd.DataFrame(
+            self._domain_path().ICD10_Condition_Map.entities().fetch()
+        )[['ICD10_Eye', 'Glaucoma_Diagnosis']]
+
+        icd10_asso = icd10_asso.merge(cmap, on='ICD10_Eye', how='left')
+        # Codes outside the curated glaucoma subset have no cross-walk row -> Other.
+        icd10_asso['Condition_Label'] = icd10_asso['Glaucoma_Diagnosis'].fillna('Other')
+
+        # Multi-code priority tie-break (extended for the folded 'Unspecified
+        # Glaucoma' value the cross-walk can now emit; an established subtype
+        # outranks a suspect, a suspect outranks a bare 'Other').
+        priority = {'PACG': 1, 'POAG': 2, 'Unspecified Glaucoma': 3, 'GS': 4, 'Other': 5}
         icd10_asso['Priority'] = icd10_asso['Condition_Label'].map(priority)
         icd10_asso = icd10_asso.sort_values(by=['Clinical_Records', 'Priority'])
         combined_prior = icd10_asso.drop_duplicates(subset=['Clinical_Records'], keep='first')
-        combined_prior = combined_prior.drop(columns=['RID', 'ICD10_Eye', 'Priority'])
+        combined_prior = combined_prior.drop(
+            columns=['RID', 'ICD10_Eye', 'Priority', 'Glaucoma_Diagnosis']
+        )
         return combined_prior
 
     def insert_condition_label(self, condition_label: pd.DataFrame):

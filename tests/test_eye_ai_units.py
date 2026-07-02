@@ -220,3 +220,99 @@ class TestInsertConditionLabel:
         inserted = mock_path.Clinical_Records.insert.call_args[0][0]
         assert all("RID" in row and "Clinical_Records" not in row for row in inserted)
         assert {row["RID"] for row in inserted} == {"C1", "C2"}
+
+
+class TestComputeConditionLabel:
+    """Parity test: the ICD10_Condition_Map join reproduces the retired
+    icd_mapping wildcard dict on every record EXCEPT the enumerated H40.9
+    divergence (H40.9 -> 'Unspecified Glaucoma' now vs 'Other' before), and
+    honors the extended multi-code priority tie-break. No live catalog."""
+
+    @staticmethod
+    def _old_dict_label(code: str) -> str:
+        """The retired wildcard mapping, inlined for the parity oracle."""
+        m = {
+            "H40.00": "GS", "H40.01": "GS", "H40.02": "GS", "H40.03": "GS",
+            "H40.04": "GS", "H40.05": "GS", "H40.06": "GS",
+            "H40.10": "POAG", "H40.11": "POAG", "H40.12": "POAG",
+            "H40.13": "POAG", "H40.14": "POAG", "H40.15": "POAG",
+            "H40.2": "PACG",
+        }
+        for k, v in m.items():
+            if code.startswith(k):
+                return v
+        return "Other"
+
+    def _crosswalk_df(self):
+        """Synthetic ICD10_Condition_Map matching the checked-in manifest rule:
+        H40.0*->GS, H40.1*->POAG, H40.2*->PACG, H40.9->Unspecified Glaucoma,
+        else Other (incl. H40.3-6*, H40.89)."""
+        codes = [
+            "H40.001", "H40.011", "H40.10X1", "H40.1121", "H40.20X1", "H40.2210",
+            "H40.9", "H40.89", "H40.31X1", "H40.41X2",
+        ]
+        def cond(c):
+            if c.startswith("H40.0"): return "GS"
+            if c.startswith("H40.1"): return "POAG"
+            if c.startswith("H40.2"): return "PACG"
+            if c == "H40.9": return "Unspecified Glaucoma"
+            return "Other"
+        return pd.DataFrame({"ICD10_Eye": codes, "Glaucoma_Diagnosis": [cond(c) for c in codes]})
+
+    def _make_ai(self):
+        from unittest.mock import MagicMock
+        ai = EyeAI.__new__(EyeAI)
+        mock_path = MagicMock()
+        mock_path.ICD10_Condition_Map.entities.return_value.fetch.return_value = (
+            self._crosswalk_df().to_dict(orient="records")
+        )
+        ai._domain_path = MagicMock(return_value=mock_path)
+        return ai
+
+    def test_join_matches_dict_except_h40_9(self):
+        # One code per record so the winner == that code's label (no tie-break).
+        codes = ["H40.001", "H40.011", "H40.1121", "H40.20X1", "H40.9", "H40.89", "H40.31X1"]
+        asso = pd.DataFrame({
+            "RID": [f"R{i}" for i in range(len(codes))],
+            "Clinical_Records": [f"C{i}" for i in range(len(codes))],
+            "ICD10_Eye": codes,
+        })
+        out = EyeAI.compute_condition_label(self._make_ai(), asso.copy())
+        got = dict(zip(out["Clinical_Records"], out["Condition_Label"]))
+
+        diffs = []
+        for i, code in enumerate(codes):
+            old = self._old_dict_label(code)
+            new = got[f"C{i}"]
+            if old != new:
+                diffs.append((code, old, new))
+        # The ONLY permitted divergence is H40.9: Other (old) -> Unspecified Glaucoma (new).
+        assert diffs == [("H40.9", "Other", "Unspecified Glaucoma")], diffs
+
+    def test_priority_tiebreak_prefers_established_over_suspect(self):
+        # A record with both a suspect code (H40.001->GS) and POAG keeps POAG.
+        asso = pd.DataFrame({
+            "RID": ["R0", "R1"],
+            "Clinical_Records": ["C0", "C0"],
+            "ICD10_Eye": ["H40.001", "H40.1121"],
+        })
+        out = EyeAI.compute_condition_label(self._make_ai(), asso.copy())
+        assert len(out) == 1
+        assert out.iloc[0]["Condition_Label"] == "POAG"
+
+    def test_priority_unspecified_glaucoma_outranks_suspect(self):
+        # Unspecified Glaucoma (H40.9) beats a bare suspect (H40.001->GS).
+        asso = pd.DataFrame({
+            "RID": ["R0", "R1"],
+            "Clinical_Records": ["C0", "C0"],
+            "ICD10_Eye": ["H40.001", "H40.9"],
+        })
+        out = EyeAI.compute_condition_label(self._make_ai(), asso.copy())
+        assert out.iloc[0]["Condition_Label"] == "Unspecified Glaucoma"
+
+    def test_unmapped_code_falls_to_other(self):
+        asso = pd.DataFrame({
+            "RID": ["R0"], "Clinical_Records": ["C0"], "ICD10_Eye": ["H99.999"],
+        })
+        out = EyeAI.compute_condition_label(self._make_ai(), asso.copy())
+        assert out.iloc[0]["Condition_Label"] == "Other"
